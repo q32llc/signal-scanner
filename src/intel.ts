@@ -11,12 +11,17 @@
 
 import type { Finding, Severity, Confidence } from "./index";
 import type { RuleScoreModel } from "./rules/types";
+import { matchCachedFeeds, type IntelStorage } from "./feeds";
+
+export type { IntelStorage } from "./feeds";
 
 export interface UrlIntelConfig {
   /** Fetch implementation. Defaults to the global `fetch`. */
   fetchImpl?: typeof fetch;
   /** Google Safe Browsing API key. When absent, that source reports an error. */
   googleSafeBrowsingKey?: string;
+  /** Storage backing the cached blocklist feeds. When present, the cached-feed source runs. */
+  storage?: IntelStorage;
   /** Skip all network calls and return no sources (e.g. non-production). */
   disabled?: boolean;
   /** Max distinct hosts queried per host-based source. Default 100. */
@@ -32,12 +37,14 @@ export interface UrlIntelConfig {
 export type IntelSourceStatus = "match" | "clean" | "error";
 
 export interface IntelMatch {
-  /** Stable source id, e.g. "urlhaus", "threatfox", "google-safebrowsing". */
+  /** Stable source id, e.g. "urlhaus", "threatfox", "google-safebrowsing", "cached-feeds". */
   source: string;
   /** Human-readable provider name. */
   provider: string;
   url?: string;
   host?: string;
+  /** Evidence strength (0-100). Live API sources are high; cached feeds carry their band. */
+  score: number;
   detail: Record<string, unknown>;
 }
 
@@ -67,7 +74,11 @@ interface IntelContext {
   timeoutMs: number;
   userAgent: string;
   googleSafeBrowsingKey?: string;
+  storage?: IntelStorage;
 }
+
+// Live API hits are treated as strong evidence; cached feeds carry their own band.
+const LIVE_INTEL_SCORE = 95;
 
 interface IntelSource {
   source: string;
@@ -100,10 +111,14 @@ export async function checkUrlIntel(input: UrlIntelInput, config: UrlIntelConfig
     fetch: config.fetchImpl ?? globalThis.fetch,
     timeoutMs: config.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     userAgent: config.userAgent ?? DEFAULT_USER_AGENT,
-    googleSafeBrowsingKey: config.googleSafeBrowsingKey
+    googleSafeBrowsingKey: config.googleSafeBrowsingKey,
+    storage: config.storage
   };
 
-  const sources = await Promise.all(INTEL_SOURCES.map((source) => source.run({ urls, hosts }, ctx)));
+  // The cached-feed source only joins when storage is wired — we don't list a
+  // source we can't query.
+  const activeSources = ctx.storage ? [...INTEL_SOURCES, CACHED_FEEDS_SOURCE] : INTEL_SOURCES;
+  const sources = await Promise.all(activeSources.map((source) => source.run({ urls, hosts }, ctx)));
   const matches = sources.flatMap((source) => source.matches);
   const findings = matches.map((match, index) => findingForMatch(match, index));
   return { sources, matches, findings };
@@ -169,6 +184,29 @@ const INTEL_SOURCES: IntelSource[] = [
   }
 ];
 
+// Matches crawled hosts against the cached blocklist feed index in storage.
+// Only included in the run when config.storage is provided.
+const CACHED_FEEDS_SOURCE: IntelSource = {
+  source: "cached-feeds",
+  provider: "Blocklist feeds",
+  async run(input, ctx) {
+    const base = { source: "cached-feeds", provider: "Blocklist feeds" };
+    if (!ctx.storage) return { ...base, status: "clean", urlsChecked: 0, hostsChecked: 0, matches: [] };
+    const r = await guarded(() => matchCachedFeeds(ctx.storage!, input.hosts));
+    if (r.error) {
+      return { ...base, status: "error", reason: r.error, urlsChecked: 0, hostsChecked: input.hosts.length, matches: [] };
+    }
+    const matches: IntelMatch[] = (r.value ?? []).map((m) => ({
+      source: "cached-feeds",
+      provider: m.source ? `Blocklist: ${m.source}` : "Blocklist feeds",
+      host: m.host,
+      score: m.score,
+      detail: { feed: m.feedId, feed_source: m.source }
+    }));
+    return settle(base, 0, input.hosts.length, matches, undefined);
+  }
+};
+
 function settle(
   base: { source: string; provider: string },
   urlsChecked: number,
@@ -199,6 +237,7 @@ async function queryUrlhausHost(host: string, ctx: IntelContext): Promise<IntelM
     source: "urlhaus",
     provider: "URLhaus",
     host,
+    score: LIVE_INTEL_SCORE,
     detail: {
       query_status: response.query_status,
       url_count: Array.isArray(response.urls) ? response.urls.length : 0,
@@ -217,6 +256,7 @@ async function queryUrlhausUrl(url: string, ctx: IntelContext): Promise<IntelMat
     provider: "URLhaus",
     url,
     host,
+    score: LIVE_INTEL_SCORE,
     detail: {
       query_status: response.query_status,
       threat: response.threat,
@@ -234,6 +274,7 @@ async function queryThreatFoxHost(host: string, ctx: IntelContext): Promise<Inte
     source: "threatfox",
     provider: "ThreatFox",
     host,
+    score: LIVE_INTEL_SCORE,
     detail: {
       query_status: response.query_status,
       ioc_count: Array.isArray(response.data) ? response.data.length : 0,
@@ -268,6 +309,7 @@ async function queryGoogleSafeBrowsing(urls: string[], ctx: IntelContext): Promi
     provider: "Google Safe Browsing",
     url: typeof match?.threat?.url === "string" ? match.threat.url : undefined,
     host: hostOf(String(match?.threat?.url ?? "")) ?? undefined,
+    score: LIVE_INTEL_SCORE,
     detail: {
       threat_type: match?.threatType,
       platform_type: match?.platformType,
@@ -278,23 +320,30 @@ async function queryGoogleSafeBrowsing(urls: string[], ctx: IntelContext): Promi
 
 // ---- Findings ------------------------------------------------------------
 
-const INTEL_SCORE: RuleScoreModel = { base: 95, tags: ["hosting", "url"] };
+/** Map an evidence score (0-100) onto the lib's severity/confidence buckets. */
+export function severityForScore(score: number): Severity {
+  if (score >= 85) return "high";
+  if (score >= 60) return "medium";
+  if (score >= 40) return "low";
+  return "info";
+}
 
 function findingForMatch(match: IntelMatch, index: number): Finding {
   const locationValue = match.url ?? match.host ?? "unknown";
   const ruleId = `intel.${match.source}`;
+  const scoreModel: RuleScoreModel = { base: match.score, tags: ["hosting", "url"] };
   return {
     id: `${ruleId}:${index}`,
     ruleId,
-    severity: "high" as Severity,
-    confidence: "high" as Confidence,
-    score: INTEL_SCORE.base,
-    scoreModel: INTEL_SCORE,
+    severity: severityForScore(match.score),
+    confidence: match.score >= 80 ? ("high" as Confidence) : ("medium" as Confidence),
+    score: match.score,
+    scoreModel,
     title: `Known-bad ${match.url ? "URL" : "host"} flagged by ${match.provider}`,
-    description: `${match.provider} threat intelligence matched a crawled ${match.url ? "URL" : "host"}.`,
+    description: `${match.provider} threat intelligence matched a crawled ${match.url ? "URL" : "host"} (score ${match.score}).`,
     locationType: "url",
     locationValue,
-    metadata: { intel_source: match.source, provider: match.provider, host: match.host, url: match.url, ...match.detail }
+    metadata: { intel_source: match.source, provider: match.provider, host: match.host, url: match.url, score: match.score, ...match.detail }
   };
 }
 

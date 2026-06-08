@@ -23,6 +23,10 @@
     "./intel": {
       "types": "./src/intel.ts",
       "default": "./src/intel.ts"
+    },
+    "./feeds": {
+      "types": "./src/feeds.ts",
+      "default": "./src/feeds.ts"
     }
   },
   "sideEffects": false
