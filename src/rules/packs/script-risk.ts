@@ -4,14 +4,15 @@ export const scriptRiskRules: PatternRule[] = [
   {
     id: "dynamic_code_execution",
     pack: "script-risk",
-    severity: "high",
-    confidence: "high",
+    severity: "low",
+    confidence: "medium",
     title: "Dynamic code execution",
     description: "JavaScript calls eval().",
     locationType: "javascript",
     pattern: /\beval\s*\(/,
     counter: "dynamic_code_execution",
-    score: { base: 35, tags: ["script"] }
+    // eval() is ubiquitous in legitimate minified bundles; weak signal alone.
+    score: { base: 12, tags: ["script"] }
   },
   {
     id: "function_constructor_with_string",
@@ -198,12 +199,14 @@ export const scriptCompositeRules: Record<
   form_action_changed_by_javascript: {
     id: "form_action_changed_by_javascript",
     pack: "phishing",
-    severity: "medium",
+    severity: "low",
     confidence: "medium",
     title: "Form action changed by JavaScript",
     description: "JavaScript appears to change a form action target.",
     locationType: "javascript",
-    score: { base: 26, tags: ["credential", "phishing", "script"] }
+    // Legitimate SPAs/SSO flows rewrite form actions; weak on its own, and the
+    // "credential"/"phishing" tags were escalating the score multiplier.
+    score: { base: 12, tags: ["script"] }
   },
   wallet_api_plus_external_beacon: {
     id: "wallet_api_plus_external_beacon",

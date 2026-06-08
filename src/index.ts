@@ -544,11 +544,17 @@ function finalizeAggregateRules(state: ScannerState): void {
   if (incremented(state, "content.login_ui_image_reference")) {
     addRuleFinding(state, htmlRules.credential_ui_rendered_as_image, pageUrl(state) ?? "site", {});
   }
-  if (incremented(state, "content.crypto_wallet_login_language")) {
-    addRuleFinding(state, htmlRules.crypto_wallet_login_language, pageUrl(state) ?? "site", {});
-  }
-  if (incremented(state, "content.crypto_trading_landing_language")) {
-    addRuleFinding(state, htmlRules.crypto_trading_landing_language, pageUrl(state) ?? "site", {});
+  // Crypto trigger-word signals only count on an already-suspicious host. They
+  // were built for shared-hosted crypto phishing; on reputable hosts (e.g. a
+  // LinkedIn login page that merely contains "wallet"/"swap" in bundled JS) they
+  // are pure noise.
+  if (hasSuspiciousTargetContext(state)) {
+    if (incremented(state, "content.crypto_wallet_login_language")) {
+      addRuleFinding(state, htmlRules.crypto_wallet_login_language, pageUrl(state) ?? "site", {});
+    }
+    if (incremented(state, "content.crypto_trading_landing_language")) {
+      addRuleFinding(state, htmlRules.crypto_trading_landing_language, pageUrl(state) ?? "site", {});
+    }
   }
   if (incremented(state, "content.seo_trademark_stuffing")) {
     addRuleFinding(state, htmlRules.seo_trademark_stuffing, pageUrl(state) ?? "site", {});
@@ -629,12 +635,19 @@ function hasRiskyUrlFlags(url: ExtractedUrl): boolean {
 }
 
 function hasCryptoWalletLoginLanguage(text: string): boolean {
-  return /\b(?:crypto|usdt|tether|metamask|walletconnect|coinbase|binance|ledger|trust\s+wallet)\b/i.test(text) &&
-    /\b(?:login|log\s*in|sign\s*in|account|password|securely|access)\b/i.test(text);
+  // Require a strong, crypto-specific term (not bare "crypto"/"ledger", which
+  // collide with normal sites) paired with credential/wallet-connect intent.
+  return /\b(?:metamask|walletconnect|usdt|tether|trust\s+wallet|seed\s+phrase|connect\s+wallet|coinbase|binance|web3)\b/i.test(text) &&
+    /\b(?:login|log\s*in|sign\s*in|connect|password|securely|access|restore|import)\b/i.test(text);
 }
 
 function hasCryptoTradingLandingLanguage(text: string): boolean {
-  const matches = text.match(/\b(?:crypto|defi|dexs?|solana|swap|token|blockchain|wallet|usdt|tether|coinbase|koinbse|pionex|jupiter|velodrome|ledger|exchange|trading|trade|liquidity|market\s+maker|optimism)\b/gi) ?? [];
+  // Crypto-native vocabulary. Generic finance words (token, exchange, trade,
+  // market, liquidity) are excluded — they appear on ordinary sites and in
+  // minified JS (CSRF/OAuth "token"). The emitted finding is additionally gated
+  // on a suspicious host (see finalizeAggregateRules) so reputable sites that
+  // merely mention crypto don't trip it.
+  const matches = text.match(/\b(?:crypto|defi|dexs?|solana|swap|blockchain|wallet|web3|metamask|walletconnect|usdt|tether|coinbase|binance|jupiter|airdrop|staking|seed\s+phrase)\b/gi) ?? [];
   return new Set(matches.map((match) => match.toLowerCase())).size >= 2;
 }
 
@@ -648,16 +661,19 @@ function hasSeoTrademarkStuffing(text: string): boolean {
 }
 
 function hasLoginUiImageReference(text: string): boolean {
-  return /(?:imageData|alt|name|src|media|filename|fileName|url)["':\s{,[\]\\]*(?:[^"'<>]{0,160})?(?:screencapture|screenshot|screen[-_ ]?capture|login[-_ ]?page|signin[-_ ]?page|password[-_ ]?form)/i.test(text) ||
+  return /(?:imageData|alt|name|src|media|filename|fileName|url)["':\s{,[\]\\]*(?:[^"'<>]{0,160})?(?:screencapture|screenshot|screen[-_ ]?capture)/i.test(text) ||
     /(?:screencapture|screenshot|screen[-_ ]?capture)[^"'<>]{0,160}\b(?:login|log[-_ ]?in|signin|sign[-_ ]?in|password|account)\b/i.test(text) ||
     /\b(?:login|log[-_ ]?in|signin|sign[-_ ]?in|password|account)\b[^"'<>]{0,160}(?:screencapture|screenshot|screen[-_ ]?capture)/i.test(text);
 }
 
 function hasSuspiciousTargetContext(state: ScannerState): boolean {
   if (incremented(state, "redirect.final_url_offsite")) return true;
+  // Genuine HOST suspicion only. A login-intent path ("/login", "/account") is
+  // benign — every legitimate login page has one — so suspicious_path_terms is
+  // deliberately excluded here.
   return [...state.urls.values()].some((url) =>
     isSourceOrFinalUrl(state, url.normalized) &&
-    url.flags.some((flag) => ["shared_hosting_subdomain", "generated_host_label", "suspicious_tld", "suspicious_path_terms", "punycode", "ip_literal"].includes(flag))
+    url.flags.some((flag) => ["shared_hosting_subdomain", "generated_host_label", "suspicious_tld", "punycode", "ip_literal"].includes(flag))
   );
 }
 
