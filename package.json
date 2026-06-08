@@ -1,0 +1,21 @@
+{
+  "name": "@q32/signal-scanner",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Static web and source-code signal scanner with bounded streaming analyzers, extractors, rule packs, scoring, and normalized reports.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/q32llc/signal-scanner.git"
+  },
+  "scripts": {
+    "scan": "tsx scripts/scan.ts"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "sideEffects": false
+}
