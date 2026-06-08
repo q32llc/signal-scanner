@@ -19,6 +19,10 @@
     "./node-tls": {
       "types": "./src/node-tls.ts",
       "default": "./src/node-tls.ts"
+    },
+    "./intel": {
+      "types": "./src/intel.ts",
+      "default": "./src/intel.ts"
     }
   },
   "sideEffects": false
