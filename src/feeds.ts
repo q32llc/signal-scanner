@@ -135,11 +135,11 @@ export async function finalizeFeedShard(
   band: number,
   prefix: string
 ): Promise<number> {
-  const stagingRoot = `${ROOT}/${feedId}/${version}/staging/`;
-  const suffix = `/${band}/${prefix}.json`;
-  const keys = (await storage.list(stagingRoot)).filter((key) => key.endsWith(suffix));
+  // Staging is keyed band/prefix/chunk, so this lists only the chunks for this
+  // one shard rather than scanning the whole staging tree.
+  const shardStaging = `${ROOT}/${feedId}/${version}/staging/${band}/${prefix}/`;
   const merged = new Set<string>();
-  for (const key of keys) {
+  for (const key of await storage.list(shardStaging)) {
     for (const host of await readArray(storage, key)) merged.add(host);
   }
   if (merged.size) await putJson(storage, shardKey(feedId, version, String(band), prefix), [...merged]);
@@ -252,7 +252,8 @@ function shardKey(feedId: string, version: string, band: string, prefix: string)
 }
 
 function stagingKey(feedId: string, version: string, chunkId: string, band: string, prefix: string): string {
-  return `${ROOT}/${feedId}/${version}/staging/${chunkId}/${band}/${prefix}.json`;
+  // band/prefix first so a single shard's chunks share a narrow list prefix.
+  return `${ROOT}/${feedId}/${version}/staging/${band}/${prefix}/${chunkId}.json`;
 }
 
 // score band (string) -> shard prefix -> hosts
