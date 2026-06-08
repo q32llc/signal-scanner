@@ -22,16 +22,22 @@ export const rulePacks = {
     htmlRules.hidden_iframe_off_origin,
     htmlRules.excessive_external_scripts_on_login_page,
     htmlRules.login_page_with_punycode_links,
+    htmlRules.credential_ui_rendered_as_image,
+    htmlRules.crypto_wallet_login_language,
+    htmlRules.crypto_trading_landing_language,
+    htmlRules.seo_trademark_stuffing,
+    htmlRules.credential_form_on_suspicious_host,
     urlRules.punycode_login_url,
     urlRules.brand_impersonation_url
   ],
-  redirects: [htmlRules.meta_refresh_external, urlRules.redirect_to_url_shortener, ...scriptRiskRules.filter((rule) => rule.pack === "redirects")],
+  redirects: [htmlRules.meta_refresh_external, urlRules.redirect_to_url_shortener, urlRules.final_url_offsite_redirect, ...scriptRiskRules.filter((rule) => rule.pack === "redirects")],
   "url-risk": [
     urlRules.private_ip_url,
     urlRules.ip_literal_url,
     urlRules.suspicious_tld_url,
     urlRules.download_like_external_url,
     urlRules.malware_download_like_url,
+    urlRules.shared_hosting_subdomain_url,
     urlRules.brand_impersonation_url,
     urlRules.generated_landing_url
   ],

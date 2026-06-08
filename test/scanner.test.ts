@@ -159,6 +159,102 @@ test("detects URL-risk, CSS import, and invisible overlay signatures", () => {
   expect(report.counters.invisible_form_overlay).toBe(1);
 });
 
+test("adds low-context shared-hosting URL signal for target URLs", () => {
+  const scanner = createScanner({ source: { url: "https://trade-tetherapps.wixstudio.com/en-us", contentType: "text/html" } });
+  scanner.feed(encoder.encode("<!doctype html><html><body>hosted page</body></html>"));
+  const report = scanner.finish();
+
+  expect(report.findings.map((finding) => finding.ruleId)).toContain("shared_hosting_subdomain_url");
+  expect(report.urls.find((url) => url.normalized === "https://trade-tetherapps.wixstudio.com/en-us")?.flags).toContain("shared_hosting_subdomain");
+  expect(report.findings.find((finding) => finding.ruleId === "shared_hosting_subdomain_url")?.severity).toBe("low");
+});
+
+test("adds independent signals for shared-hosted crypto login pages rendered as screenshot images", () => {
+  const scanner = createScanner({ source: { url: "https://trade-tetherapps.wixstudio.com/en-us", contentType: "text/html" } });
+  scanner.feed(encoder.encode(`
+    <script type="application/json">
+      {
+        "props": {
+          "seo": {
+            "title": "Tether | Login",
+            "description": "Access your crypto wallet securely with Tether Login."
+          },
+          "render": {
+            "compProps": {
+              "hero": {
+                "imageInfo": {
+                  "imageData": {
+                    "alt": "screencapture-app-tether-to-app-login-2026-05-29.png",
+                    "name": "screencapture-app-tether-to-app-login-2026-05-29.png"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    </script>
+  `));
+  const report = scanner.finish();
+
+  expect(report.counters["content.crypto_wallet_login_language"]).toBeGreaterThan(0);
+  expect(report.counters["content.login_ui_image_reference"]).toBeGreaterThan(0);
+  expect(report.findings.map((finding) => finding.ruleId)).toEqual(
+    expect.arrayContaining(["shared_hosting_subdomain_url", "credential_ui_rendered_as_image", "crypto_wallet_login_language"])
+  );
+  expect(report.disposition).toBe("block");
+});
+
+test("adds independent signals for shared-hosted DeFi landing pages with trademark stuffing", () => {
+  const scanner = createScanner({ source: { url: "https://home-apps-jupiter.wixstudio.com/us-en", contentType: "text/html" } });
+  scanner.feed(encoder.encode(`
+    <title>Jupiter Swap®™</title>
+    <meta name="description" content="The flagship Jupiter Swap engine routes your trade across all major Solana DEXs simultaneously.">
+  `));
+  const report = scanner.finish();
+
+  expect(report.findings.map((finding) => finding.ruleId)).toEqual(
+    expect.arrayContaining(["shared_hosting_subdomain_url", "crypto_trading_landing_language", "seo_trademark_stuffing"])
+  );
+  expect(report.disposition).toBe("block");
+});
+
+test("detects credential forms on redirected generated hosts", () => {
+  const scanner = createScanner({
+    source: {
+      url: "http://abr.abbruchberlin.com/",
+      finalUrl: "https://manager-area-client92745867.vttlr77.fr/c15f0eed63e8184c07e0b1c8665ca7f6/?payer",
+      contentType: "text/html"
+    }
+  });
+  scanner.feed(encoder.encode('<form action="config/to-us.php" method="post"><input name="username"><input type="password" name="password"></form>'));
+  const report = scanner.finish();
+
+  expect(report.urls.find((url) => url.normalized.startsWith("https://manager-area-client92745867"))?.flags).toContain("generated_host_label");
+  expect(report.findings.map((finding) => finding.ruleId)).toEqual(
+    expect.arrayContaining(["final_url_offsite_redirect", "credential_form_on_suspicious_host"])
+  );
+  expect(report.disposition).toBe("block");
+});
+
+test("classifies TLS credibility metadata inside the scanner", () => {
+  const scanner = createScanner({
+    source: {
+      url: "https://www.bbc.com/",
+      contentType: "text/html",
+      tls: {
+        issuer: "C=US, O=Let's Encrypt, CN=R3",
+        subject: "CN=www.bbc.com"
+      }
+    }
+  });
+  scanner.feed(encoder.encode("<!doctype html><html></html>"));
+  const report = scanner.finish();
+
+  expect(report.counters["tls.free_dv_certificate"]).toBe(1);
+  expect(report.counters["tls.issuer.c_us_o_let_s_encrypt_cn_r3"]).toBe(1);
+});
+
 test("scores direct URLhaus-style malware download URLs before byte content is parsed", () => {
   const scanner = createScanner({ source: { url: "http://203.0.113.10/hiddenbin/boatnet.sh4" } });
   scanner.feed(new Uint8Array([0x7f, 0x45, 0x4c, 0x46]));
@@ -175,7 +271,7 @@ test("detects brand impersonation from URL before page fetch succeeds", () => {
 
   expect(report.findings.map((finding) => finding.ruleId)).toEqual(expect.arrayContaining(["brand_impersonation_url"]));
   expect(report.findings.find((finding) => finding.ruleId === "brand_impersonation_url")?.metadata.brand).toBe("ionos");
-  expect(report.disposition).toBe("block");
+  expect(report.disposition).toBe("warn");
 });
 
 test("detects generated suspicious landing URLs before page fetch succeeds", () => {
@@ -263,13 +359,13 @@ test("detects expanded JavaScript and Node source-code static hotspots", () => {
 });
 
 test("exposes first-class rule packs", () => {
-  expect(Object.keys(htmlRules)).toEqual(expect.arrayContaining(["credential_form_posts_off_origin", "mixed_content_script"]));
+  expect(Object.keys(htmlRules)).toEqual(expect.arrayContaining(["credential_form_posts_off_origin", "mixed_content_script", "credential_ui_rendered_as_image", "crypto_wallet_login_language", "crypto_trading_landing_language", "credential_form_on_suspicious_host"]));
   expect(Object.keys(htmlTechnologyRules)).toEqual(expect.arrayContaining(["legacy_jquery_reference", "wordpress_surface_reference"]));
   expect(scriptRiskRules.map((rule) => rule.id)).toEqual(expect.arrayContaining(["dynamic_code_execution", "document_write_script"]));
   expect(Object.keys(scriptCompositeRules)).toEqual(expect.arrayContaining(["decoded_dynamic_execution"]));
   expect(sourceCodeRules.map((rule) => rule.id)).toEqual(expect.arrayContaining(["curl_pipe_shell", "postinstall_script", "non_literal_regexp"]));
   expect(Object.keys(cssRules)).toEqual(expect.arrayContaining(["hidden_link_cluster"]));
-  expect(Object.keys(urlRules)).toEqual(expect.arrayContaining(["punycode_login_url", "ip_literal_url", "malware_download_like_url", "brand_impersonation_url", "generated_landing_url"]));
+  expect(Object.keys(urlRules)).toEqual(expect.arrayContaining(["punycode_login_url", "final_url_offsite_redirect", "ip_literal_url", "malware_download_like_url", "shared_hosting_subdomain_url", "brand_impersonation_url", "generated_landing_url"]));
   expect(Object.keys(decodedArtifactRules)).toEqual(expect.arrayContaining(["large_base64_blob"]));
   expect(Object.keys(binaryRules)).toEqual(expect.arrayContaining(["elf_executable_magic", "content_type_magic_mismatch"]));
   expect(Object.keys(rulePacks)).toEqual(

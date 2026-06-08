@@ -10,7 +10,8 @@ export const scriptRiskRules: PatternRule[] = [
     description: "JavaScript calls eval().",
     locationType: "javascript",
     pattern: /\beval\s*\(/,
-    counter: "dynamic_code_execution"
+    counter: "dynamic_code_execution",
+    score: { base: 35, tags: ["script"] }
   },
   {
     id: "function_constructor_with_string",
@@ -20,7 +21,8 @@ export const scriptRiskRules: PatternRule[] = [
     title: "Function constructor with string",
     description: "JavaScript constructs code from a string.",
     locationType: "javascript",
-    pattern: /\bnew\s+Function\s*\(/
+    pattern: /\bnew\s+Function\s*\(/,
+    score: { base: 38, tags: ["script"] }
   },
   {
     id: "string_timer_execution",
@@ -31,7 +33,8 @@ export const scriptRiskRules: PatternRule[] = [
     description: "JavaScript passes a string to a timer execution API.",
     locationType: "javascript",
     pattern: /\bset(?:Timeout|Interval)\s*\(\s*['"`]/,
-    counter: "dynamic_code_execution"
+    counter: "dynamic_code_execution",
+    score: { base: 24, tags: ["script"] }
   },
   {
     id: "document_write_script",
@@ -41,7 +44,8 @@ export const scriptRiskRules: PatternRule[] = [
     title: "document.write usage",
     description: "JavaScript writes dynamic HTML into the document.",
     locationType: "javascript",
-    pattern: /\bdocument\.write\s*\(/
+    pattern: /\bdocument\.write\s*\(/,
+    score: { base: 8, tags: ["script"] }
   },
   {
     id: "innerhtml_script_injection",
@@ -51,7 +55,8 @@ export const scriptRiskRules: PatternRule[] = [
     title: "HTML injection sink",
     description: "JavaScript assigns to an HTML injection sink.",
     locationType: "javascript",
-    pattern: /\.(?:innerHTML|outerHTML)\s*=/
+    pattern: /\.(?:innerHTML|outerHTML)\s*=/,
+    score: { base: 10, tags: ["script"] }
   },
   {
     id: "insert_adjacent_html",
@@ -61,7 +66,8 @@ export const scriptRiskRules: PatternRule[] = [
     title: "insertAdjacentHTML usage",
     description: "JavaScript inserts HTML through insertAdjacentHTML().",
     locationType: "javascript",
-    pattern: /\.insertAdjacentHTML\s*\(/
+    pattern: /\.insertAdjacentHTML\s*\(/,
+    score: { base: 8, tags: ["script"] }
   },
   {
     id: "dynamic_script_src",
@@ -71,7 +77,8 @@ export const scriptRiskRules: PatternRule[] = [
     title: "Dynamic script creation",
     description: "JavaScript creates a script element dynamically.",
     locationType: "javascript",
-    pattern: /\bcreateElement\s*\(\s*['"]script['"]\s*\)/
+    pattern: /\bcreateElement\s*\(\s*['"]script['"]\s*\)/,
+    score: { base: 18, tags: ["script"] }
   },
   {
     id: "script_src_assignment",
@@ -81,7 +88,8 @@ export const scriptRiskRules: PatternRule[] = [
     title: "Dynamic script src assignment",
     description: "JavaScript assigns to a script source dynamically.",
     locationType: "javascript",
-    pattern: /\.src\s*=|setAttribute\s*\(\s*['"]src['"]/
+    pattern: /\.src\s*=|setAttribute\s*\(\s*['"]src['"]/,
+    score: { base: 18, tags: ["script"] }
   },
   {
     id: "append_child_script",
@@ -91,7 +99,8 @@ export const scriptRiskRules: PatternRule[] = [
     title: "Dynamic script append",
     description: "JavaScript appends a dynamically created script element.",
     locationType: "javascript",
-    pattern: /\.appendChild\s*\(\s*(?:script|s|el|node)\s*\)/
+    pattern: /\.appendChild\s*\(\s*(?:script|s|el|node)\s*\)/,
+    score: { base: 6, tags: ["script"] }
   },
   {
     id: "external_request_api_seen",
@@ -101,7 +110,8 @@ export const scriptRiskRules: PatternRule[] = [
     title: "External request API",
     description: "JavaScript references an outbound request API.",
     locationType: "javascript",
-    pattern: /\b(?:fetch|XMLHttpRequest|sendBeacon|WebSocket)\b/
+    pattern: /\b(?:fetch|XMLHttpRequest|sendBeacon|WebSocket)\b/,
+    score: { base: 6, tags: ["script"] }
   },
   {
     id: "js_location_external",
@@ -111,7 +121,8 @@ export const scriptRiskRules: PatternRule[] = [
     title: "JavaScript redirect logic",
     description: "JavaScript references browser redirect APIs.",
     locationType: "javascript",
-    pattern: /\b(?:location\.href|location\.assign|location\.replace|window\.open)\b/
+    pattern: /\b(?:location\.href|location\.assign|location\.replace|window\.open)\b/,
+    score: { base: 20, tags: ["redirect", "script"] }
   },
   {
     id: "decoder_seen",
@@ -122,7 +133,8 @@ export const scriptRiskRules: PatternRule[] = [
     description: "JavaScript references a common string decoder API.",
     locationType: "javascript",
     pattern: /\b(?:atob|btoa|unescape|String\.fromCharCode)\b/,
-    counter: "decoder_seen"
+    counter: "decoder_seen",
+    score: { base: 6, tags: ["decoded", "script"] }
   },
   {
     id: "charcodeat_decoder_loop",
@@ -132,7 +144,8 @@ export const scriptRiskRules: PatternRule[] = [
     title: "charCodeAt decoder loop",
     description: "JavaScript uses charCodeAt in loop-like code, a common lightweight decoder pattern.",
     locationType: "javascript",
-    pattern: /(?:for|while)\s*\([^)]*\)[\s\S]{0,300}\.charCodeAt\s*\(/
+    pattern: /(?:for|while)\s*\([^)]*\)[\s\S]{0,300}\.charCodeAt\s*\(/,
+    score: { base: 22, tags: ["decoded", "obfuscation", "script"] }
   },
   {
     id: "browser_storage_or_clipboard_seen",
@@ -142,7 +155,8 @@ export const scriptRiskRules: PatternRule[] = [
     title: "Storage or clipboard access",
     description: "JavaScript references browser storage, cookies, or clipboard APIs.",
     locationType: "javascript",
-    pattern: /\b(?:localStorage|sessionStorage|document\.cookie|navigator\.clipboard)\b/
+    pattern: /\b(?:localStorage|sessionStorage|document\.cookie|navigator\.clipboard)\b/,
+    score: { base: 14, tags: ["exfiltration", "script"] }
   },
   {
     id: "wallet_interaction_with_obfuscation",
@@ -152,7 +166,8 @@ export const scriptRiskRules: PatternRule[] = [
     title: "Wallet API reference",
     description: "JavaScript references wallet or approval APIs.",
     locationType: "javascript",
-    pattern: /\b(?:window\.ethereum|WalletConnect|ethereum\.request)\b|\.(?:approve|permit)\s*\(|\bmethod\s*:\s*['"]eth_/i
+    pattern: /\b(?:window\.ethereum|WalletConnect|ethereum\.request)\b|\.(?:approve|permit)\s*\(|\bmethod\s*:\s*['"]eth_/i,
+    score: { base: 20, tags: ["script", "wallet"] }
   }
 ];
 
@@ -167,7 +182,8 @@ export const scriptCompositeRules: Record<
     confidence: "medium",
     title: "Credential or storage exfiltration candidate",
     description: "JavaScript combines credential/storage signals with outbound request APIs.",
-    locationType: "javascript"
+    locationType: "javascript",
+    score: { base: 72, tags: ["credential", "exfiltration", "script"] }
   },
   decoded_dynamic_execution: {
     id: "decoded_dynamic_execution",
@@ -176,7 +192,8 @@ export const scriptCompositeRules: Record<
     confidence: "high",
     title: "Decoded dynamic execution",
     description: "JavaScript combines decoder APIs with dynamic execution.",
-    locationType: "javascript"
+    locationType: "javascript",
+    score: { base: 76, tags: ["decoded", "obfuscation", "script"] }
   },
   form_action_changed_by_javascript: {
     id: "form_action_changed_by_javascript",
@@ -185,7 +202,8 @@ export const scriptCompositeRules: Record<
     confidence: "medium",
     title: "Form action changed by JavaScript",
     description: "JavaScript appears to change a form action target.",
-    locationType: "javascript"
+    locationType: "javascript",
+    score: { base: 26, tags: ["credential", "phishing", "script"] }
   },
   wallet_api_plus_external_beacon: {
     id: "wallet_api_plus_external_beacon",
@@ -194,7 +212,8 @@ export const scriptCompositeRules: Record<
     confidence: "medium",
     title: "Wallet API plus external request",
     description: "JavaScript combines wallet APIs with outbound request APIs.",
-    locationType: "javascript"
+    locationType: "javascript",
+    score: { base: 72, tags: ["exfiltration", "script", "wallet"] }
   },
   payment_input_event_hooks: {
     id: "payment_input_event_hooks",
@@ -203,6 +222,7 @@ export const scriptCompositeRules: Record<
     confidence: "medium",
     title: "Payment input event hooks",
     description: "JavaScript attaches input/change listeners near payment-card fields.",
-    locationType: "javascript"
+    locationType: "javascript",
+    score: { base: 72, tags: ["payment", "script"] }
   }
 };

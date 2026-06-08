@@ -8,7 +8,8 @@ export const cssRules: Record<"hidden_link_cluster" | "unicode_bidi_trick" | "cs
     confidence: "medium",
     title: "Hidden CSS content",
     description: "CSS contains hidden or offscreen content patterns.",
-    locationType: "css"
+    locationType: "css",
+    score: { base: 4, tags: ["seo"] }
   },
   unicode_bidi_trick: {
     id: "unicode_bidi_trick",
@@ -17,7 +18,8 @@ export const cssRules: Record<"hidden_link_cluster" | "unicode_bidi_trick" | "cs
     confidence: "high",
     title: "Unicode bidi CSS trick",
     description: "CSS uses bidi override, which can hide or reorder visible text.",
-    locationType: "css"
+    locationType: "css",
+    score: { base: 20, tags: ["obfuscation"] }
   },
   css_imports_suspicious_domain: {
     id: "css_imports_suspicious_domain",
@@ -26,7 +28,8 @@ export const cssRules: Record<"hidden_link_cluster" | "unicode_bidi_trick" | "cs
     confidence: "medium",
     title: "CSS imports off-site resource",
     description: "CSS imports or loads an off-site URL.",
-    locationType: "url"
+    locationType: "url",
+    score: { base: 12, tags: ["script", "url"] }
   },
   invisible_form_overlay: {
     id: "invisible_form_overlay",
@@ -35,6 +38,7 @@ export const cssRules: Record<"hidden_link_cluster" | "unicode_bidi_trick" | "cs
     confidence: "medium",
     title: "Invisible form overlay style",
     description: "CSS contains fixed/absolute overlay and invisibility patterns that can hide or intercept form input.",
-    locationType: "css"
+    locationType: "css",
+    score: { base: 24, tags: ["credential", "phishing"] }
   }
 };

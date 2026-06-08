@@ -3,11 +3,13 @@ import type { RuleDefinition } from "../types";
 export const urlRules: Record<
   | "punycode_login_url"
   | "redirect_to_url_shortener"
+  | "final_url_offsite_redirect"
   | "private_ip_url"
   | "ip_literal_url"
   | "suspicious_tld_url"
   | "download_like_external_url"
   | "malware_download_like_url"
+  | "shared_hosting_subdomain_url"
   | "brand_impersonation_url"
   | "generated_landing_url",
   RuleDefinition
@@ -19,7 +21,8 @@ export const urlRules: Record<
     confidence: "high",
     title: "Punycode login URL",
     description: "A login-like URL uses punycode.",
-    locationType: "url"
+    locationType: "url",
+    score: { base: 70, tags: ["phishing", "url"] }
   },
   redirect_to_url_shortener: {
     id: "redirect_to_url_shortener",
@@ -28,7 +31,18 @@ export const urlRules: Record<
     confidence: "medium",
     title: "URL shortener destination",
     description: "Content references a known URL shortener.",
-    locationType: "url"
+    locationType: "url",
+    score: { base: 20, tags: ["redirect", "url"] }
+  },
+  final_url_offsite_redirect: {
+    id: "final_url_offsite_redirect",
+    pack: "redirects",
+    severity: "medium",
+    confidence: "high",
+    title: "Final URL redirects off-site",
+    description: "The fetched URL resolves to a different registrable domain than the submitted URL.",
+    locationType: "url",
+    score: { base: 25, tags: ["redirect", "url"] }
   },
   private_ip_url: {
     id: "private_ip_url",
@@ -37,7 +51,8 @@ export const urlRules: Record<
     confidence: "high",
     title: "Private or local network URL",
     description: "Content references a localhost or private-network URL.",
-    locationType: "url"
+    locationType: "url",
+    score: { base: 25, tags: ["url"] }
   },
   ip_literal_url: {
     id: "ip_literal_url",
@@ -46,7 +61,8 @@ export const urlRules: Record<
     confidence: "medium",
     title: "IP literal URL",
     description: "Content references a URL by IP address instead of a hostname.",
-    locationType: "url"
+    locationType: "url",
+    score: { base: 22, tags: ["url"] }
   },
   suspicious_tld_url: {
     id: "suspicious_tld_url",
@@ -55,7 +71,8 @@ export const urlRules: Record<
     confidence: "medium",
     title: "Suspicious TLD URL",
     description: "Content references a URL with a TLD commonly seen in abuse investigations.",
-    locationType: "url"
+    locationType: "url",
+    score: { base: 8, tags: ["url"] }
   },
   download_like_external_url: {
     id: "download_like_external_url",
@@ -64,7 +81,8 @@ export const urlRules: Record<
     confidence: "medium",
     title: "Download-like external URL",
     description: "Content references an off-site URL with download or payload path terms.",
-    locationType: "url"
+    locationType: "url",
+    score: { base: 18, tags: ["url"], repeatMultiplier: 0.25, maxRepeats: 3 }
   },
   malware_download_like_url: {
     id: "malware_download_like_url",
@@ -73,7 +91,18 @@ export const urlRules: Record<
     confidence: "medium",
     title: "Malware-download-like URL path",
     description: "URL path resembles common malware download naming for scripts, botnet payloads, or architecture-specific binaries.",
-    locationType: "url"
+    locationType: "url",
+    score: { base: 55, tags: ["binary", "url"] }
+  },
+  shared_hosting_subdomain_url: {
+    id: "shared_hosting_subdomain_url",
+    pack: "url-risk",
+    severity: "low",
+    confidence: "medium",
+    title: "Shared-hosting subdomain",
+    description: "The target URL is hosted on a shared/free-hosting subdomain rather than an independently controlled registrable domain.",
+    locationType: "url",
+    score: { base: 6, tags: ["hosting", "url"] }
   },
   brand_impersonation_url: {
     id: "brand_impersonation_url",
@@ -82,7 +111,8 @@ export const urlRules: Record<
     confidence: "medium",
     title: "Brand term on unrelated domain",
     description: "URL contains a known brand term while the registrable domain does not belong to that brand.",
-    locationType: "url"
+    locationType: "url",
+    score: { base: 30, tags: ["phishing", "url"] }
   },
   generated_landing_url: {
     id: "generated_landing_url",
@@ -91,6 +121,7 @@ export const urlRules: Record<
     confidence: "medium",
     title: "Generated suspicious landing URL",
     description: "URL has generated-looking host/path structure commonly seen in injected landing pages and fake-update campaigns.",
-    locationType: "url"
+    locationType: "url",
+    score: { base: 78, tags: ["phishing", "url"] }
   }
 };

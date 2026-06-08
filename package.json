@@ -15,6 +15,10 @@
     ".": {
       "types": "./src/index.ts",
       "default": "./src/index.ts"
+    },
+    "./node-tls": {
+      "types": "./src/node-tls.ts",
+      "default": "./src/node-tls.ts"
     }
   },
   "sideEffects": false

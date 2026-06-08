@@ -1,5 +1,5 @@
 import { binaryRules, binaryStringRules, cssRules, decodedArtifactRules, htmlRules, htmlTechnologyRules, scriptCompositeRules, scriptRiskRules, sourceCodeRules, urlRules } from "./rules/packs";
-import type { RuleDefinition } from "./rules/types";
+import type { RuleDefinition, RuleScoreModel, ScoreTag } from "./rules/types";
 
 export type ContentKind = "html" | "javascript" | "css" | "json" | "svg" | "text" | "unknown" | "archive" | "executable";
 export type Severity = "info" | "low" | "medium" | "high" | "critical";
@@ -28,6 +28,18 @@ export interface ScannerSource {
   filename?: string;
   contentType?: string | null;
   originUrl?: string;
+  tls?: TlsMetadata;
+}
+
+export interface TlsMetadata {
+  authorized?: boolean;
+  authorizationError?: string | null;
+  issuer?: string;
+  subject?: string;
+  validFrom?: string;
+  validTo?: string;
+  fingerprint256?: string;
+  serialNumber?: string;
 }
 
 export interface ArtifactRecord {
@@ -44,6 +56,7 @@ export interface Finding {
   severity: Severity;
   confidence: Confidence;
   score: number;
+  scoreModel: RuleScoreModel;
   title: string;
   description: string;
   locationType: "url" | "html" | "javascript" | "css" | "source" | "binary" | "decoded_artifact" | "aggregate";
@@ -146,6 +159,8 @@ export function createScanner(options: ScannerOptions = {}): Scanner {
   const maxDecodeDepth = options.maxDecodeDepth ?? DEFAULT_MAX_DECODE_DEPTH;
   if (state.source.url) addUrl(state, state.source.url);
   if (state.source.finalUrl && state.source.finalUrl !== state.source.url) addUrl(state, state.source.finalUrl);
+  scanRedirectContext(state);
+  scanTlsContext(state);
 
   return {
     feed(chunk: Uint8Array): Finding[] {
@@ -238,10 +253,12 @@ export function normalizeUrl(raw: string, base?: string): ExtractedUrl | null {
     if (isUrlShortener(host)) flags.push("url_shortener");
     if (/(?:login|signin|account|verify|wallet|checkout|payment|download|payload)/i.test(url.pathname)) flags.push("suspicious_path_terms");
     if (isSuspiciousTld(host)) flags.push("suspicious_tld");
-    if (/(?:download|payload|update|installer|setup|invoice|verify|wallet|checkout|payment|\.exe|\.scr|\.msi|\.dmg|\.pkg|\.apk|\.zip)$/i.test(url.pathname)) {
+    if (/(?:\/|^)(?:payload|installer|setup|invoice|verify|wallet|checkout|payment)(?:[\/_.-]|$)|\.(?:exe|scr|msi|dmg|pkg|apk|zip)$/i.test(url.pathname)) {
       flags.push("download_like_path");
     }
     if (isMalwareDownloadLikePath(url.pathname)) flags.push("malware_download_like_path");
+    if (isSharedHostingSubdomain(host, registrableDomain)) flags.push("shared_hosting_subdomain");
+    if (isGeneratedHostLabel(host, registrableDomain)) flags.push("generated_host_label");
     return {
       raw,
       normalized,
@@ -265,6 +282,7 @@ function scanText(
   maxDecodeDepth: number
 ): void {
   collectUrls(state, text);
+  scanPageIntentSignals(state, text);
   if (state.contentKind === "html" || /<html|<script|<form|<iframe/i.test(text)) scanHtml(state, text);
   if (state.contentKind === "javascript" || state.inScript || /<script\b/i.test(text)) {
     scanJavaScript(state, text);
@@ -351,6 +369,14 @@ function scanHtml(state: ScannerState, text: string): void {
   scanTechnologyFingerprint(state, text, pageUrl(state) ?? "html");
   if (/<\/script\s*>/i.test(text)) state.inScript = false;
   if (/(?:login|sign in|password|account|verify|checkout|payment)/i.test(text)) increment(state, "brand_login_or_payment_language");
+}
+
+function scanPageIntentSignals(state: ScannerState, text: string): void {
+  const normalized = text.replace(/\\\//g, "/");
+  if (hasCryptoWalletLoginLanguage(normalized)) increment(state, "content.crypto_wallet_login_language");
+  if (hasCryptoTradingLandingLanguage(normalized)) increment(state, "content.crypto_trading_landing_language");
+  if (hasLoginUiImageReference(normalized)) increment(state, "content.login_ui_image_reference");
+  if (hasSeoTrademarkStuffing(normalized)) increment(state, "content.seo_trademark_stuffing");
 }
 
 function scanJavaScript(state: ScannerState, text: string): void {
@@ -497,6 +523,9 @@ function finalizeAggregateRules(state: ScannerState): void {
     if (form.hasPayment && [...state.urls.values()].some((url) => url.relation === "off-site")) {
       addRuleFinding(state, htmlRules.card_fields_plus_external_script, pageUrl(state) ?? "payment-form", {});
     }
+    if (form.hasPassword && hasSuspiciousTargetContext(state)) {
+      addRuleFinding(state, htmlRules.credential_form_on_suspicious_host, pageUrl(state) ?? "form", {});
+    }
   }
   const externalScripts = [...state.findings].filter((finding) => finding.ruleId === "external_script_from_unrelated_domain").length;
   const hasSensitivePageContext = state.forms.some((form) => form.hasPassword || form.hasPayment);
@@ -512,21 +541,46 @@ function finalizeAggregateRules(state: ScannerState): void {
   if ([...state.urls.values()].some((url) => url.flags.includes("punycode")) && incremented(state, "brand_login_or_payment_language")) {
     addRuleFinding(state, htmlRules.login_page_with_punycode_links, pageUrl(state) ?? "site", {});
   }
+  if (incremented(state, "content.login_ui_image_reference")) {
+    addRuleFinding(state, htmlRules.credential_ui_rendered_as_image, pageUrl(state) ?? "site", {});
+  }
+  if (incremented(state, "content.crypto_wallet_login_language")) {
+    addRuleFinding(state, htmlRules.crypto_wallet_login_language, pageUrl(state) ?? "site", {});
+  }
+  if (incremented(state, "content.crypto_trading_landing_language")) {
+    addRuleFinding(state, htmlRules.crypto_trading_landing_language, pageUrl(state) ?? "site", {});
+  }
+  if (incremented(state, "content.seo_trademark_stuffing")) {
+    addRuleFinding(state, htmlRules.seo_trademark_stuffing, pageUrl(state) ?? "site", {});
+  }
 }
 
 export function scoreFindings(findings: Finding[]): number {
-  const weights: Record<Severity, number> = { info: 5, low: 20, medium: 50, high: 78, critical: 95 };
   let score = 0;
-  const seen = new Set<string>();
+  const groups = new Map<string, Finding[]>();
+  const tags = new Set<ScoreTag>();
   for (const finding of findings) {
-    const independentBonus = seen.has(finding.ruleId) ? 0 : 4;
-    seen.add(finding.ruleId);
-    score = Math.max(score, weights[finding.severity] + independentBonus);
+    const group = groups.get(finding.ruleId);
+    if (group) group.push(finding);
+    else groups.set(finding.ruleId, [finding]);
+    for (const tag of finding.scoreModel.tags) tags.add(tag);
   }
-  if (seen.size >= 3) score += 8;
-  if (findings.some((finding) => /credential|payment|wallet|exfil/i.test(finding.ruleId))) score += 10;
-  if (findings.some((finding) => /decoded|base64|escape|fromcharcode|obfuscation/i.test(finding.ruleId))) score += 8;
-  return Math.max(0, Math.min(100, score));
+  for (const group of groups.values()) {
+    const model = group[0].scoreModel;
+    const repeats = Math.min(group.length - 1, model.maxRepeats ?? 0);
+    score += model.base + repeats * model.base * (model.repeatMultiplier ?? 0);
+  }
+  score *= scoreMultiplier(tags);
+  return Math.max(0, Math.min(100, Math.round(score)));
+}
+
+function scoreMultiplier(tags: Set<ScoreTag>): number {
+  let multiplier = 1;
+  if (tags.has("credential") && (tags.has("hosting") || tags.has("redirect") || tags.has("url"))) multiplier *= 1.2;
+  if ((tags.has("payment") || tags.has("wallet")) && (tags.has("exfiltration") || tags.has("redirect"))) multiplier *= 1.15;
+  if (tags.has("decoded") && (tags.has("script") || tags.has("exfiltration"))) multiplier *= 1.15;
+  if (tags.has("binary") && tags.has("url")) multiplier *= 1.1;
+  return multiplier;
 }
 
 export function dispositionForScore(score: number): Disposition {
@@ -574,6 +628,63 @@ function hasRiskyUrlFlags(url: ExtractedUrl): boolean {
   return url.flags.some((flag) => ["punycode", "ip_literal", "private_or_localhost", "url_shortener", "suspicious_tld", "suspicious_path_terms", "malware_download_like_path"].includes(flag));
 }
 
+function hasCryptoWalletLoginLanguage(text: string): boolean {
+  return /\b(?:crypto|usdt|tether|metamask|walletconnect|coinbase|binance|ledger|trust\s+wallet)\b/i.test(text) &&
+    /\b(?:login|log\s*in|sign\s*in|account|password|securely|access)\b/i.test(text);
+}
+
+function hasCryptoTradingLandingLanguage(text: string): boolean {
+  const matches = text.match(/\b(?:crypto|defi|dexs?|solana|swap|token|blockchain|wallet|usdt|tether|coinbase|koinbse|pionex|jupiter|velodrome|ledger|exchange|trading|trade|liquidity|market\s+maker|optimism)\b/gi) ?? [];
+  return new Set(matches.map((match) => match.toLowerCase())).size >= 2;
+}
+
+function hasSeoTrademarkStuffing(text: string): boolean {
+  const values = [
+    ...[...text.matchAll(/<title[^>]*>([^<]{0,240})<\/title>/gis)].map((match) => match[1]),
+    ...[...text.matchAll(/"(?:title|children)"\s*:\s*"([^"]{0,240})"/gis)].map((match) => match[1]),
+    ...[...text.matchAll(/"(?:og:title|twitter:title)"\s*,\s*"content"\s*:\s*"([^"]{0,240})"/gis)].map((match) => match[1])
+  ];
+  return values.some((value) => (value.match(/[®™]/g) ?? []).length >= 2);
+}
+
+function hasLoginUiImageReference(text: string): boolean {
+  return /(?:imageData|alt|name|src|media|filename|fileName|url)["':\s{,[\]\\]*(?:[^"'<>]{0,160})?(?:screencapture|screenshot|screen[-_ ]?capture|login[-_ ]?page|signin[-_ ]?page|password[-_ ]?form)/i.test(text) ||
+    /(?:screencapture|screenshot|screen[-_ ]?capture)[^"'<>]{0,160}\b(?:login|log[-_ ]?in|signin|sign[-_ ]?in|password|account)\b/i.test(text) ||
+    /\b(?:login|log[-_ ]?in|signin|sign[-_ ]?in|password|account)\b[^"'<>]{0,160}(?:screencapture|screenshot|screen[-_ ]?capture)/i.test(text);
+}
+
+function hasSuspiciousTargetContext(state: ScannerState): boolean {
+  if (incremented(state, "redirect.final_url_offsite")) return true;
+  return [...state.urls.values()].some((url) =>
+    isSourceOrFinalUrl(state, url.normalized) &&
+    url.flags.some((flag) => ["shared_hosting_subdomain", "generated_host_label", "suspicious_tld", "suspicious_path_terms", "punycode", "ip_literal"].includes(flag))
+  );
+}
+
+function scanRedirectContext(state: ScannerState): void {
+  if (!state.source.url || !state.source.finalUrl || state.source.url === state.source.finalUrl) return;
+  const source = normalizeUrl(state.source.url);
+  const final = normalizeUrl(state.source.finalUrl, state.source.url);
+  if (source?.registrableDomain && final?.registrableDomain && source.registrableDomain !== final.registrableDomain) {
+    increment(state, "redirect.final_url_offsite");
+    addRuleFinding(state, urlRules.final_url_offsite_redirect, final.normalized, { source_url: source.normalized });
+  }
+}
+
+function scanTlsContext(state: ScannerState): void {
+  const tls = state.source.tls;
+  if (!tls) return;
+  const issuer = tls.issuer ?? "";
+  const subject = tls.subject ?? "";
+  if (tls.authorized === false) increment(state, "tls.unauthorized_certificate");
+  if (/(?:let'?s encrypt|zerossl|buypass|ssl\.com)/i.test(issuer)) increment(state, "tls.free_dv_certificate");
+  const organization = subject.match(/(?:^|,\s*)O\s*=\s*([^,]+)/i)?.[1]?.trim();
+  if (organization && !/^(?:cloudflare|google trust services|amazon|fastly|akamai|wix|netlify|vercel)\b/i.test(organization)) {
+    increment(state, "tls.organization_validated_certificate");
+  }
+  if (issuer) increment(state, `tls.issuer.${issuer.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "").slice(0, 80)}`);
+}
+
 function extractCssUrls(text: string): string[] {
   const urls: string[] = [];
   for (const match of text.matchAll(/@import\s+(?:url\(\s*)?["']?([^"')\s;]+)|url\(\s*["']?([^"')]+)["']?\s*\)/gi)) {
@@ -609,6 +720,9 @@ function addUrl(state: ScannerState, raw: string): void {
   if (normalized.flags.includes("malware_download_like_path") && isSourceOrFinalUrl(state, normalized.normalized)) {
     addRuleFinding(state, urlRules.malware_download_like_url, normalized.normalized, {});
   }
+  if (normalized.flags.includes("shared_hosting_subdomain") && isSourceOrFinalUrl(state, normalized.normalized)) {
+    addRuleFinding(state, urlRules.shared_hosting_subdomain_url, normalized.normalized, {});
+  }
   const brand = unrelatedBrandInUrl(normalized);
   if (brand && isSourceOrFinalUrl(state, normalized.normalized)) {
     addRuleFinding(state, urlRules.brand_impersonation_url, normalized.normalized, { brand });
@@ -625,7 +739,7 @@ function isSourceOrFinalUrl(state: ScannerState, normalizedUrl: string): boolean
 }
 
 function addRuleFinding(state: ScannerState, rule: RuleDefinition, locationValue: string, metadata: Record<string, unknown>): void {
-  addFinding(state, rule.id, rule.severity, rule.confidence, rule.title, rule.description, rule.locationType, locationValue, { ...metadata, rule_pack: rule.pack });
+  addFinding(state, rule.id, rule.severity, rule.confidence, rule.score, rule.title, rule.description, rule.locationType, locationValue, { ...metadata, rule_pack: rule.pack });
 }
 
 function addFinding(
@@ -633,6 +747,7 @@ function addFinding(
   ruleId: string,
   severity: Severity,
   confidence: Confidence,
+  scoreModel: RuleScoreModel,
   title: string,
   description: string,
   locationType: Finding["locationType"],
@@ -642,13 +757,13 @@ function addFinding(
   const key = `${ruleId}:${locationType}:${locationValue}`;
   if (state.findingKeys.has(key)) return;
   state.findingKeys.add(key);
-  const score = { info: 5, low: 20, medium: 50, high: 78, critical: 95 }[severity];
   state.findings.push({
     id: `${ruleId}:${state.findings.length}`,
     ruleId,
     severity,
     confidence,
-    score,
+    score: scoreModel.base,
+    scoreModel,
     title,
     description,
     locationType,
@@ -743,6 +858,38 @@ function isPrivateHost(host: string): boolean {
 
 function isUrlShortener(host: string): boolean {
   return /^(?:bit\.ly|t\.co|tinyurl\.com|goo\.gl|ow\.ly|is\.gd|buff\.ly|cutt\.ly)$/.test(host);
+}
+
+function isSharedHostingSubdomain(host: string, registrableDomain: string | null): boolean {
+  if (!registrableDomain || host === registrableDomain) return false;
+  return [
+    "wixstudio.com",
+    "wixsite.com",
+    "webflow.io",
+    "netlify.app",
+    "vercel.app",
+    "github.io",
+    "pages.dev",
+    "workers.dev",
+    "firebaseapp.com",
+    "web.app",
+    "herokuapp.com",
+    "render.com",
+    "glitch.me",
+    "replit.app",
+    "wordpress.com",
+    "blogspot.com",
+    "weebly.com",
+    "myshopify.com"
+  ].includes(registrableDomain);
+}
+
+function isGeneratedHostLabel(host: string, registrableDomain: string | null): boolean {
+  const label = host.split(".")[0] ?? "";
+  if (!label || label === registrableDomain) return false;
+  return /(?:client|account|secure|manager|payment|support|verify|login|area)[-_]?\d{5,}/i.test(label) ||
+    /^[a-z]+(?:-[a-z]+){2,}-\d{4,}$/.test(label) ||
+    /^[a-z0-9]{16,}$/.test(label);
 }
 
 function isSuspiciousTld(host: string): boolean {
@@ -841,7 +988,7 @@ function scanTechnologyFingerprint(state: ScannerState, text: string, locationVa
   if (/\bbootstrap(?:\.min)?\.js\b|bootstrap[-.]3\.\d+(?:\.\d+)?(?:\.min)?\.js\b|Bootstrap v3\./i.test(text)) {
     addRuleFinding(state, htmlTechnologyRules.legacy_bootstrap_reference, locationValue, {});
   }
-  if (/\blodash(?:\.min)?\.js\b|lodash[-.]4\.17\.(?:[0-9]|1[0-9]|20)(?:\.min)?\.js\b|lodash v4\.17\.(?:[0-9]|1[0-9]|20)/i.test(text)) {
+  if (/\blodash[-.]4\.17\.(?:[0-9]|1[0-9]|20)(?:\.min)?\.js\b|lodash v4\.17\.(?:[0-9]|1[0-9]|20)/i.test(text)) {
     addRuleFinding(state, htmlTechnologyRules.legacy_lodash_reference, locationValue, {});
   }
   if (/(?:sites\/default\/files|drupal-settings-json|Drupal\.settings|\/core\/misc\/drupal\.js)/i.test(text)) {

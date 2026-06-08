@@ -298,7 +298,7 @@ function summarizeFindings(findings: Finding[]): Array<{ ruleId: string; severit
 function scoreAggregate(reports: TargetReport[]): { score: number; disposition: string; sha256: string } {
   const findings = reports.flatMap((item) => item.report.findings);
   const baseScore = Math.max(...reports.map((item) => item.report.score), 0);
-  const bonusScore = Math.min(100, baseScore + (new Set(findings.map((finding) => finding.ruleId)).size >= 4 ? 8 : 0));
+  const bonusScore = Math.min(100, baseScore + (baseScore >= 50 && new Set(findings.map((finding) => finding.ruleId)).size >= 4 ? 8 : 0));
   const score = baseScore >= 75 ? bonusScore : Math.min(74, bonusScore);
   const disposition = score >= 75 ? "block" : score >= 50 ? "review" : score >= 25 ? "warn" : "allow";
   const sha256 = createHash("sha256").update(JSON.stringify(reports.map((item) => [item.target, item.report.score, item.report.findings.map((finding) => finding.ruleId)]))).digest("hex");

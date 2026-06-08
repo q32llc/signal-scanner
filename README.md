@@ -41,6 +41,36 @@ The scanner keeps bounded state: rolling text windows, line/column tracking, tag
 
 It does not submit forms, execute JavaScript, set cookies, or require a full file.
 
+## TLS Metadata
+
+TLS analysis belongs to the scanner, but TLS collection depends on the host runtime. Pass collected metadata through `source.tls` when creating a scanner:
+
+```ts
+const scanner = createScanner({
+  source: {
+    url: "https://example.com",
+    contentType: "text/html",
+    tls: {
+      authorized: true,
+      issuer: "O=Google Trust Services, CN=WE1",
+      subject: "CN=example.com",
+      validFrom: "Jan 1 00:00:00 2026 GMT",
+      validTo: "Mar 31 23:59:59 2026 GMT"
+    }
+  }
+});
+```
+
+Node-compatible runtimes, including Cloudflare Workers with `nodejs_compat`, can use the optional helper:
+
+```ts
+import { collectTlsMetadata } from "@q32/signal-scanner/node-tls";
+
+const tls = await collectTlsMetadata("https://example.com", { timeoutMs: 5000 });
+```
+
+The default scanner export does not import `node:tls`, so streaming analysis remains portable to runtimes that only provide fetch/body streams.
+
 ## Node CLI
 
 The package includes a small Node CLI for local checks and corpus testing. It is intentionally separate from any Worker queue, upload, R2, D1, or Fly-machine orchestration.
@@ -71,8 +101,8 @@ When robots are enabled, the crawler reads `Sitemap:` directives and also probes
 ## Implemented Components
 
 - Content detector for HTML, JavaScript, CSS, JSON, SVG, text, unknown, and archive content.
-- URL/domain extractor with normalization, relative URL resolution, registrable-domain comparison, scheme classification, IP/private-host detection, punycode flags, shortener flags, suspicious-TLD flags, and download-like path flags.
-- HTML analyzer for forms, password/payment fields, scripts, links, iframes, meta refresh redirects, hidden iframe patterns, login/payment language, and technology/dependency surface fingerprints.
+- URL/domain extractor with normalization, relative URL resolution, registrable-domain comparison, scheme classification, IP/private-host detection, punycode flags, shared-hosting subdomain flags, shortener flags, suspicious-TLD flags, and download-like path flags.
+- HTML analyzer for forms, password/payment fields, scripts, links, iframes, meta refresh redirects, hidden iframe patterns, login/payment language, page-model screenshot/login cues, crypto/DeFi landing language, trademark-stuffed SEO titles, and technology/dependency surface fingerprints.
 - JavaScript text analyzer for dynamic execution, DOM injection sinks, dynamic script creation, decoder APIs, request APIs, redirect APIs, storage/cookie/clipboard access, wallet APIs, payment input hooks, and exfiltration candidates.
 - CSS analyzer for remote imports/URLs, hidden/offscreen content, opacity tricks, invisible overlays, and unicode-bidi tricks.
 - Normalizer/decoder for high-confidence bounded base64, JavaScript hex/unicode escapes, and `String.fromCharCode` literal artifacts, with recursive rescanning.
@@ -84,12 +114,25 @@ When robots are enabled, the crawler reads `Sitemap:` directives and also probes
 
 Rules live under `src/rules/packs/`:
 
-- `html.ts` for phishing, credential forms, payment forms, iframes, external scripts, mixed content, meta refresh redirects, dependency fingerprints, and web technology fingerprints.
+- `html.ts` for phishing, credential forms, suspicious-host credential forms, image-rendered credential UIs, crypto/wallet login language, crypto/DeFi trading landing language, trademark-stuffed SEO titles, payment forms, iframes, external scripts, mixed content, meta refresh redirects, dependency fingerprints, and web technology fingerprints.
 - `script-risk.ts` for dynamic execution, DOM injection sinks, dynamic script loading, redirect APIs, request APIs, browser storage/cookie access, decoder APIs, wallet APIs, payment hooks, and composite script risks.
 - `source-code.ts` for source-code risk signals such as hardcoded secret candidates, webhook URLs, child process execution, curl-pipe-shell, install scripts, non-literal require/RegExp, sensitive file reads, private keys, weak crypto, and template escaping disabled.
 - `css.ts` for remote imports, hidden/offscreen content, invisible overlays, and unicode-bidi tricks.
-- `urls.ts` for punycode login URLs, URL shorteners, private/local target URLs, suspicious TLDs, brand impersonation, generated landing URLs, and download-like target URLs.
+- `urls.ts` for punycode login URLs, URL shorteners, private/local target URLs, shared-hosting subdomains, suspicious TLDs, brand impersonation, generated landing URLs, and download-like target URLs.
 - `decoders.ts` for decoded base64, JavaScript escapes, and `String.fromCharCode` artifacts.
 - `binary.ts` for executable magic, content-type/magic mismatch, ELF stack flags, IoT botnet strings, router exploit strings, dropper commands, and DHT/CNC protocol strings.
+
+Every rule has an explicit score model:
+
+```ts
+score: {
+  base: 34,
+  tags: ["credential", "phishing"],
+  repeatMultiplier: 0.25,
+  maxRepeats: 3
+}
+```
+
+`severity` and `confidence` are report/display metadata. They do not drive scoring. The scorer sums each rule's explicit `base`, applies each rule's explicit repeat policy, and then applies a small set of explicit tag-based context multipliers such as credential plus suspicious hosting, wallet/payment plus exfiltration/redirect, decoded artifact plus script behavior, or binary plus URL evidence.
 
 Complete-file tools such as ClamAV, capa, FLOSS, and normal binary YARA workflows can be routed by applications when a full file is materialized. They are not faked in the streaming hot path.
