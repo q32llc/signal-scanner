@@ -1,4 +1,4 @@
-import { checkUrlIntel, isPrivateOrLocalHost, intelTargetsFromUrls } from "../src/intel";
+import { checkUrlIntel, isPrivateOrLocalHost, isMultiTenantHost, intelTargetsFromUrls } from "../src/intel";
 
 // A fetch stub keyed by URL substring so the suite is fully offline and
 // runtime-agnostic — the same code path runs in Node and in a Worker.
@@ -100,6 +100,31 @@ test("ThreatFox convicts when a domain IOC exactly matches the queried host", as
   const tf = report.sources.find((s) => s.source === "threatfox");
   expect(tf?.status).toBe("match");
   expect(tf?.matches[0]?.detail.ioc_count).toBe(1);
+});
+
+test("a malicious object in a shared bucket does not convict a site that loads from it", async () => {
+  let hostQueried = false;
+  const report = await checkUrlIntel(
+    // The site loads an asset from a shared bucket; it does NOT load the bad object.
+    { hosts: ["storage.googleapis.com"], urls: ["https://storage.googleapis.com/acme-assets/app.js"] },
+    {
+      fetchImpl: stubFetch([
+        // If queried by host, the bucket looks live-malicious (another tenant's object).
+        { match: "urlhaus-api.abuse.ch/v1/host", json: { query_status: "ok", urls: [{ url: "https://storage.googleapis.com/evil-bucket/payload.exe", url_status: "online", date_added: recentDate }] } },
+        // The exact asset the site loads is clean.
+        { match: "urlhaus-api.abuse.ch/v1/url", json: { query_status: "no_result" } },
+        { match: "threatfox-api.abuse.ch", json: { query_status: "no_result" } },
+        { match: "safebrowsing.googleapis.com", json: {} }
+      ]),
+      googleSafeBrowsingKey: "k"
+    }
+  );
+  expect(isMultiTenantHost("storage.googleapis.com")).toBe(true);
+  expect(isMultiTenantHost("d111.cloudfront.net")).toBe(true);
+  expect(isMultiTenantHost("evil.example")).toBe(false);
+  // No host-level conviction off the shared bucket; the exact loaded URL was clean.
+  expect(report.matches.filter((m) => m.source === "urlhaus")).toEqual([]);
+  expect(report.sources.find((s) => s.source === "urlhaus")?.status).toBe("clean");
 });
 
 test("reports Google Safe Browsing as an error when no key is configured", async () => {

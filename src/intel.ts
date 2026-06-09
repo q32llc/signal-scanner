@@ -237,6 +237,12 @@ async function guarded<T>(query: () => Promise<T>): Promise<{ value?: T; error?:
 
 async function queryUrlhausHost(host: string, ctx: IntelContext): Promise<IntelMatch | null> {
   if (isPrivateOrLocalHost(host)) return null;
+  // Multi-tenant hosts (cloud buckets, CDNs, app-hosting platforms) collect
+  // feed entries for OTHER tenants' malicious objects. A site that merely loads
+  // an asset from such a host must not inherit that reputation — only an
+  // exact-URL match (an object the site actually loads) convicts. See
+  // queryUrlhausUrl, which still runs against the crawled URL inventory.
+  if (isMultiTenantHost(host)) return null;
   const response = await postForm("https://urlhaus-api.abuse.ch/v1/host/", { host }, ctx);
   if (!response || response.query_status !== "ok") return null;
   const urls: any[] = Array.isArray(response.urls) ? response.urls : [];
@@ -479,6 +485,63 @@ function hostsFromUrls(urls: string[]): string[] {
 
 function dedupe(values: string[]): string[] {
   return [...new Set(values.filter(Boolean))];
+}
+
+// Hosts that serve content for many independent tenants under one name: cloud
+// object storage, file sharing, CDNs that publish arbitrary packages/content,
+// and app/site-hosting platforms (one tenant per subdomain). One tenant's
+// malicious object is not evidence about a different tenant, so these are never
+// convicted at the host level — only an exact-URL match counts.
+const MULTI_TENANT_HOST_EXACT = new Set([
+  "storage.googleapis.com",
+  "firebasestorage.googleapis.com",
+  "drive.google.com",
+  "docs.google.com",
+  "s3.amazonaws.com",
+  "raw.githubusercontent.com",
+  "gist.githubusercontent.com",
+  "objects.githubusercontent.com",
+  "cdn.jsdelivr.net",
+  "unpkg.com",
+  "files.catbox.moe",
+  "cdn.discordapp.com",
+  "media.discordapp.net"
+]);
+
+const MULTI_TENANT_HOST_SUFFIXES = [
+  // Cloud object storage
+  ".amazonaws.com",
+  ".blob.core.windows.net",
+  ".r2.dev",
+  ".r2.cloudflarestorage.com",
+  ".digitaloceanspaces.com",
+  ".googleusercontent.com",
+  ".dropboxusercontent.com",
+  // CDNs serving arbitrary tenant/package content
+  ".cloudfront.net",
+  ".akamaihd.net",
+  ".b-cdn.net",
+  ".fastly.net",
+  // App / site hosting platforms (one tenant per subdomain)
+  ".web.app",
+  ".firebaseapp.com",
+  ".netlify.app",
+  ".vercel.app",
+  ".github.io",
+  ".herokuapp.com",
+  ".pages.dev",
+  ".workers.dev",
+  ".azurewebsites.net",
+  ".appspot.com",
+  ".glitch.me",
+  ".repl.co",
+  ".surge.sh"
+];
+
+export function isMultiTenantHost(host: string): boolean {
+  const lower = host.toLowerCase();
+  if (MULTI_TENANT_HOST_EXACT.has(lower)) return true;
+  return MULTI_TENANT_HOST_SUFFIXES.some((suffix) => lower.endsWith(suffix));
 }
 
 export function isPrivateOrLocalHost(host: string): boolean {
