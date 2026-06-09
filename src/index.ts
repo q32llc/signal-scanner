@@ -1083,6 +1083,38 @@ function unrelatedBrandInUrl(url: ExtractedUrl): string | null {
 
 const SUSPICIOUS_HOST_FLAGS = ["shared_hosting_subdomain", "generated_host_label", "suspicious_tld", "punycode", "ip_literal", "url_shortener"];
 
+export interface RedirectAssessment {
+  /** The redirect crossed to a different registrable domain (not just a subdomain hop). */
+  offSite: boolean;
+  /** The destination host itself looks suspicious (shortener, suspicious TLD, punycode, IP, shared/generated host). */
+  destinationSuspicious: boolean;
+  requestedRegistrable: string;
+  finalRegistrable: string;
+  destinationFlags: string[];
+}
+
+// Single source of truth for "did this redirect leave the site, and is the
+// destination itself sketchy?" — shared by every crawler (Worker stream + Fly/
+// CLI runner) so a redirect like google.com -> www.google.com (same registrable
+// domain) or google.com -> google.de (different domain, ordinary host) is not
+// convicted, while a hop to a shortener/punycode/IP/shared host is flagged.
+export function assessRedirect(requestedUrl: string, finalUrl: string): RedirectAssessment | null {
+  let requested: URL;
+  let final: URL;
+  try {
+    requested = new URL(requestedUrl);
+    final = new URL(finalUrl);
+  } catch {
+    return null;
+  }
+  const requestedRegistrable = registrableDomainFor(requested.hostname) ?? requested.hostname;
+  const finalRegistrable = registrableDomainFor(final.hostname) ?? final.hostname;
+  const offSite = requestedRegistrable !== finalRegistrable;
+  const destinationFlags = offSite ? normalizeUrl(final.href)?.flags ?? [] : [];
+  const destinationSuspicious = destinationFlags.some((flag) => SUSPICIOUS_HOST_FLAGS.includes(flag));
+  return { offSite, destinationSuspicious, requestedRegistrable, finalRegistrable, destinationFlags };
+}
+
 // Login/account/verify path served from a host that legitimate brands never use
 // for credentials. Render-free — fires on the URL alone, before any form loads.
 function isCredentialPathOnSuspiciousHost(url: ExtractedUrl): boolean {

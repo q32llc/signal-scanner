@@ -1,4 +1,4 @@
-import { createScanner, detectContentKind, normalizeUrl } from "../src/index";
+import { assessRedirect, createScanner, detectContentKind, normalizeUrl } from "../src/index";
 import { binaryRules, cssRules, decodedArtifactRules, htmlRules, htmlTechnologyRules, rulePacks, scriptCompositeRules, scriptRiskRules, sourceCodeRules, urlRules } from "../src/rules/packs";
 
 const encoder = new TextEncoder();
@@ -33,6 +33,21 @@ test("normalizes URLs and classifies off-site, punycode, and shortener destinati
 
   const malwarePath = normalizeUrl("http://203.0.113.10/bin.sh", "https://example.com");
   expect(malwarePath?.flags).toEqual(expect.arrayContaining(["ip_literal", "malware_download_like_path"]));
+});
+
+test("assessRedirect convicts only off-site hops to suspicious destinations", () => {
+  // Same registrable domain (subdomain hop) — not off-site.
+  expect(assessRedirect("https://google.com/", "https://www.google.com/")?.offSite).toBe(false);
+  // Different registrable domain but an ordinary host — off-site, not suspicious.
+  const geo = assessRedirect("https://google.com/", "https://google.de/");
+  expect(geo?.offSite).toBe(true);
+  expect(geo?.destinationSuspicious).toBe(false);
+  // Off-site hop to a URL shortener / sketchy host — suspicious.
+  const shortened = assessRedirect("https://example.com/", "https://bit.ly/abc123");
+  expect(shortened?.offSite).toBe(true);
+  expect(shortened?.destinationSuspicious).toBe(true);
+  // Garbage input is ignored, not thrown.
+  expect(assessRedirect("not a url", "also not")).toBeNull();
 });
 
 test("streams HTML, extracts URLs, and detects off-origin credential form", () => {
