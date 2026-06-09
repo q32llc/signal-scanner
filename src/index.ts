@@ -303,7 +303,10 @@ function scanHtml(state: ScannerState, text: string): void {
         increment(state, "html.script_src");
         addUrl(state, src);
         const normalized = normalizeUrl(src, pageUrl(state));
-        if (normalized?.relation === "off-site") state.externalScripts.push(normalized);
+        // Ad/analytics/tag-manager scripts are expected on ordinary ad-funded
+        // sites (news, blogs) and are never a phishing exfil channel, so they
+        // don't count toward "suspicious external scripts".
+        if (normalized?.relation === "off-site" && !isAdOrAnalyticsHost(normalized.normalized)) state.externalScripts.push(normalized);
         if (pageUrl(state)?.startsWith("https://") && normalized?.scheme === "http") addRuleFinding(state, htmlRules.mixed_content_script, normalized.normalized, {});
         scanTechnologyFingerprint(state, src, normalized?.normalized ?? src);
       } else {
@@ -919,6 +922,64 @@ function isGeneratedHostLabel(host: string, registrableDomain: string | null): b
   return /(?:client|account|secure|manager|payment|support|verify|login|area)[-_]?\d{5,}/i.test(label) ||
     /^[a-z]+(?:-[a-z]+){2,}-\d{4,}$/.test(label) ||
     /^[a-z0-9]{16,}$/.test(label);
+}
+
+// Well-known ad, analytics, and tag-manager networks. Scripts from these are
+// ubiquitous on legitimate ad-funded sites and are never phishing exfil
+// endpoints, so they should not raise the external-script signals that target
+// credential-harvest kits.
+const AD_ANALYTICS_DOMAINS = new Set([
+  "doubleclick.net",
+  "googlesyndication.com",
+  "googletagmanager.com",
+  "googletagservices.com",
+  "google-analytics.com",
+  "googleadservices.com",
+  "adservice.google.com",
+  "gstatic.com",
+  "scorecardresearch.com",
+  "quantserve.com",
+  "quantcount.com",
+  "criteo.com",
+  "criteo.net",
+  "taboola.com",
+  "outbrain.com",
+  "adnxs.com",
+  "rubiconproject.com",
+  "pubmatic.com",
+  "casalemedia.com",
+  "amazon-adsystem.com",
+  "adsrvr.org",
+  "moatads.com",
+  "indexww.com",
+  "openx.net",
+  "3lift.com",
+  "sharethrough.com",
+  "permutive.com",
+  "permutive.app",
+  "cloudflareinsights.com",
+  "newrelic.com",
+  "nr-data.net",
+  "segment.com",
+  "segment.io",
+  "optimizely.com",
+  "hotjar.com",
+  "chartbeat.com",
+  "parsely.com",
+  "branch.io",
+  "onetrust.com",
+  "cookielaw.org",
+  "fbcdn.net",
+  "facebook.net"
+]);
+
+function isAdOrAnalyticsHost(normalizedUrl: string): boolean {
+  try {
+    const host = new URL(normalizedUrl).hostname.toLowerCase();
+    return AD_ANALYTICS_DOMAINS.has(registrableDomainFor(host) ?? host);
+  } catch {
+    return false;
+  }
 }
 
 function isSuspiciousTld(host: string): boolean {
