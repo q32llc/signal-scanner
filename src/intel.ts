@@ -20,6 +20,8 @@ export interface UrlIntelConfig {
   fetchImpl?: typeof fetch;
   /** Google Safe Browsing API key. When absent, that source reports an error. */
   googleSafeBrowsingKey?: string;
+  /** abuse.ch Auth-Key (required by URLhaus + ThreatFox). When absent, those calls go unauthenticated. */
+  abuseChAuthKey?: string;
   /** Storage backing the cached blocklist feeds. When present, the cached-feed source runs. */
   storage?: IntelStorage;
   /** Skip all network calls and return no sources (e.g. non-production). */
@@ -74,6 +76,7 @@ interface IntelContext {
   timeoutMs: number;
   userAgent: string;
   googleSafeBrowsingKey?: string;
+  abuseChAuthKey?: string;
   storage?: IntelStorage;
 }
 
@@ -114,6 +117,7 @@ export async function checkUrlIntel(input: UrlIntelInput, config: UrlIntelConfig
     timeoutMs: config.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     userAgent: config.userAgent ?? DEFAULT_USER_AGENT,
     googleSafeBrowsingKey: config.googleSafeBrowsingKey,
+    abuseChAuthKey: config.abuseChAuthKey,
     storage: config.storage
   };
 
@@ -351,10 +355,25 @@ function findingForMatch(match: IntelMatch, index: number): Finding {
 
 // ---- HTTP + host helpers -------------------------------------------------
 
+// abuse.ch (URLhaus + ThreatFox) require an Auth-Key header. Send it to those
+// hosts only; never leak it to other endpoints (e.g. Safe Browsing).
+function abuseChHeaders(url: string, ctx: IntelContext): Record<string, string> {
+  if (!ctx.abuseChAuthKey || !/\.abuse\.ch$/i.test(safeHost(url))) return {};
+  return { "Auth-Key": ctx.abuseChAuthKey };
+}
+
+function safeHost(url: string): string {
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
 async function postForm(url: string, body: Record<string, string>, ctx: IntelContext): Promise<Record<string, any> | null> {
   const response = await ctx.fetch(url, {
     method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded", "user-agent": ctx.userAgent },
+    headers: { "content-type": "application/x-www-form-urlencoded", "user-agent": ctx.userAgent, ...abuseChHeaders(url, ctx) },
     body: new URLSearchParams(body),
     signal: AbortSignal.timeout(ctx.timeoutMs)
   });
@@ -366,7 +385,7 @@ async function postForm(url: string, body: Record<string, string>, ctx: IntelCon
 async function postJson(url: string, body: Record<string, unknown>, ctx: IntelContext): Promise<Record<string, any> | null> {
   const response = await ctx.fetch(url, {
     method: "POST",
-    headers: { "content-type": "application/json", "user-agent": ctx.userAgent },
+    headers: { "content-type": "application/json", "user-agent": ctx.userAgent, ...abuseChHeaders(url, ctx) },
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(ctx.timeoutMs)
   });
