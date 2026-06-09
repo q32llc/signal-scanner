@@ -2,7 +2,43 @@ import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { createScanner, normalizeUrl, type Finding, type ScannerReport } from "../src/index";
+import vm from "node:vm";
+import { createScanner, dispositionForScore, normalizeUrl, scoreFindings, type Finding, type ScannerReport } from "../src/index";
+import { RECORDER_SOURCE, behaviorFindings, extractInlineScripts, type BehaviorReport } from "../src/dynamic";
+
+const DYNAMIC_TIMEOUT_MS = 3000;
+
+// Node-native isolation for the untrusted page JS: a fresh node:vm context with
+// only the globals the recorder needs (no process/require/fs) and a hard
+// timeout. The lib's RECORDER_SOURCE is isolate-agnostic; this is the CLI's
+// chosen executor. (isolated-vm can be swapped in here for a stronger boundary.)
+function recordBehaviorInVm(scripts: string[], url?: string): BehaviorReport {
+  const context = vm.createContext({ URL, atob, btoa, __scripts: scripts, __url: url });
+  return vm.runInNewContext(`${RECORDER_SOURCE}\nrecordBehavior(__scripts, __url)`, context, { timeout: DYNAMIC_TIMEOUT_MS }) as BehaviorReport;
+}
+
+// Run a fetched HTML page's inline scripts in the sandbox and fold the dynamic
+// findings (runtime exfil/redirects + re-scanned injected/decoded content) into
+// the page report, re-scoring so they count.
+function applyDynamicAnalysis(report: ScannerReport, chunks: Uint8Array[], url: string): void {
+  if (report.contentKind !== "html") return;
+  const total = chunks.reduce((n, c) => n + c.byteLength, 0);
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) { merged.set(chunk, offset); offset += chunk.byteLength; }
+  const scripts = extractInlineScripts(new TextDecoder("utf-8", { fatal: false }).decode(merged));
+  if (!scripts.length) return;
+  let dynamic: Finding[];
+  try {
+    dynamic = behaviorFindings(recordBehaviorInVm(scripts, url), url);
+  } catch {
+    return; // sandbox/timeout failure never breaks the scan
+  }
+  if (!dynamic.length) return;
+  report.findings = [...report.findings, ...dynamic];
+  report.score = scoreFindings(report.findings);
+  report.disposition = dispositionForScore(report.score);
+}
 
 const MAX_FETCH_BYTES = 512 * 1024;
 const MAX_CRAWL_URLS = 128;
@@ -168,6 +204,7 @@ async function scanUrl(url: string, options: CrawlOptions): Promise<TargetReport
       }
     });
     const reader = response.body?.getReader();
+    const collected: Uint8Array[] = [];
     if (reader) {
       while (bytes < options.maxBytes) {
         const next = await reader.read();
@@ -175,6 +212,7 @@ async function scanUrl(url: string, options: CrawlOptions): Promise<TargetReport
         const chunk = next.value.slice(0, Math.max(0, options.maxBytes - bytes));
         bytes += chunk.byteLength;
         responseScanner.feed(chunk);
+        collected.push(chunk);
         if (chunk.byteLength < next.value.byteLength) break;
       }
       await reader.cancel().catch(() => undefined);
@@ -183,8 +221,12 @@ async function scanUrl(url: string, options: CrawlOptions): Promise<TargetReport
       const chunk = body.slice(0, options.maxBytes);
       bytes = chunk.byteLength;
       responseScanner.feed(chunk);
+      collected.push(chunk);
     }
-    return { target: response.url || url, kind: "url", status: response.status, bytes, report: responseScanner.finish() };
+    const finalUrl = response.url || url;
+    const report = responseScanner.finish();
+    applyDynamicAnalysis(report, collected, finalUrl);
+    return { target: finalUrl, kind: "url", status: response.status, bytes, report };
   } catch (error) {
     return {
       target: url,
