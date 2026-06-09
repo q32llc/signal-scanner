@@ -8,11 +8,14 @@
 // decoded payloads. Recorded markup and eval'd code are re-fed through the
 // static scanner so existing rules light up on runtime-produced content.
 //
-// Runtime-agnostic: evaluation uses `new Function` with the globals shadowed by
-// recorder stubs, which runs unchanged in a Worker isolate and in Node. The
-// executor can be hardened per runtime later (a CF sub-isolate / Durable Object,
-// or node:vm / isolated-vm) — this module is the shared instrumentation and the
-// behavior→findings analysis.
+// This module is isolate-agnostic on purpose. It exposes:
+//   - RECORDER_SOURCE: the recorder as self-contained source, for a caller to
+//     run inside whatever isolate it has (a CF Dynamic Worker, node isolated-vm,
+//     a node:vm context, ...). The lib knows nothing about those mechanisms.
+//   - runInstrumented(): an in-process default (compiles RECORDER_SOURCE here)
+//     for when no isolate boundary is needed.
+//   - analyzeDynamicWith(html, opts, evaluate): the generic seam — the caller
+//     passes an `evaluate` that produces a BehaviorReport however it likes.
 
 import { createScanner, type Finding, type Severity, type Confidence } from "./index";
 import type { RuleScoreModel } from "./rules/types";
@@ -35,18 +38,77 @@ export interface BehaviorReport {
 export interface DynamicAnalysisOptions {
   /** Base/page URL, used to resolve relative targets and classify off-origin. */
   url?: string;
-  /** Cap on inline scripts evaluated. */
-  maxScripts?: number;
-  /** Cap on characters per script. */
-  maxScriptChars?: number;
 }
 
-const DEFAULT_MAX_SCRIPTS = 64;
-const DEFAULT_MAX_SCRIPT_CHARS = 256 * 1024;
+/** The caller supplies one of these: "run these scripts in an isolate, give me what they attempted." */
+export type IsolatedEvaluator = (scripts: string[], options: DynamicAnalysisOptions) => BehaviorReport | Promise<BehaviorReport>;
 
-const EXFIL_SCORE: RuleScoreModel = { base: 72, tags: ["exfiltration", "script"] };
-const REDIRECT_SCORE: RuleScoreModel = { base: 45, tags: ["redirect", "script"] };
-const EVAL_SCORE: RuleScoreModel = { base: 30, tags: ["obfuscation", "script"] };
+const EMPTY_REPORT: BehaviorReport = { redirects: [], network: [], writes: [], evals: [], decoded: [], cookies: [], errors: [] };
+
+// Self-contained recorder. Evaluating this source defines `recordBehavior(scripts, url)`
+// which returns a BehaviorReport. It references only standard globals (URL, atob,
+// btoa, Proxy) available in any JS isolate — no imports, no transport, no
+// assumptions about how it is hosted. Inline scripts run via `new Function` with
+// the dangerous globals shadowed by recorder stubs (sloppy mode so `eval` /
+// `Function` can be shadowed as parameters).
+export const RECORDER_SOURCE = String.raw`
+function recordBehavior(scripts, url) {
+  var report = { redirects: [], network: [], writes: [], evals: [], decoded: [], cookies: [], errors: [] };
+  var resolve = function (v) { var raw = String(v == null ? "" : v); try { return url ? new URL(raw, url).toString() : raw; } catch (e) { return raw; } };
+  var recordEval = function (c) { report.evals.push(String(c)); return undefined; };
+  var FunctionStub = function () { var a = arguments; report.evals.push(String(a[a.length - 1] == null ? "" : a[a.length - 1])); return function () {}; };
+  var locationProxy = new Proxy({ href: url || "", assign: function (u) { report.redirects.push(resolve(u)); }, replace: function (u) { report.redirects.push(resolve(u)); }, reload: function () {}, toString: function () { return url || ""; } }, { set: function (t, p, val) { if (p === "href") report.redirects.push(resolve(val)); t[p] = val; return true; } });
+  var makeElement = function (tag) {
+    var el = { tagName: String(tag).toUpperCase(), style: {}, children: [], attributes: {} };
+    var s = "", a = "";
+    Object.defineProperty(el, "src", { get: function () { return s; }, set: function (v) { s = String(v); report.network.push({ kind: el.tagName === "IMG" ? "image" : "script", url: resolve(v) }); } });
+    Object.defineProperty(el, "action", { get: function () { return a; }, set: function (v) { a = String(v); report.network.push({ kind: "form", url: resolve(v) }); } });
+    Object.defineProperty(el, "innerHTML", { get: function () { return ""; }, set: function (v) { report.writes.push(String(v)); } });
+    el.setAttribute = function (k, v) { if (k === "src") el.src = v; else if (k === "action") el.action = v; else el.attributes[k] = v; };
+    el.appendChild = function (c) { return c; }; el.addEventListener = function () {};
+    return el;
+  };
+  var documentShim = { write: function () { report.writes.push(Array.prototype.map.call(arguments, String).join("")); }, writeln: function () { report.writes.push(Array.prototype.map.call(arguments, String).join("")); }, createElement: function (t) { return makeElement(String(t)); }, getElementById: function () { return null; }, getElementsByTagName: function () { return []; }, querySelector: function () { return null; }, querySelectorAll: function () { return []; }, addEventListener: function () {}, body: makeElement("body"), head: makeElement("head"), location: locationProxy };
+  Object.defineProperty(documentShim, "cookie", { get: function () { return ""; }, set: function (v) { report.cookies.push(String(v)); } });
+  var safeAtob = function (v) { var out; try { out = atob(String(v)); } catch (e) { out = String(v); } report.decoded.push(out); return out; };
+  var safeBtoa = function (v) { try { return btoa(String(v)); } catch (e) { return String(v); } };
+  var win = {
+    document: documentShim, location: locationProxy,
+    navigator: { userAgent: "Mozilla/5.0", platform: "Win32", language: "en-US", sendBeacon: function (u) { report.network.push({ kind: "beacon", url: resolve(u) }); return true; } },
+    screen: { width: 1920, height: 1080 },
+    localStorage: { getItem: function () { return null; }, setItem: function () {}, removeItem: function () {} },
+    sessionStorage: { getItem: function () { return null; }, setItem: function () {}, removeItem: function () {} },
+    atob: safeAtob, btoa: safeBtoa,
+    fetch: function (u) { report.network.push({ kind: "fetch", url: resolve(u) }); return Promise.resolve({ ok: true, status: 200, json: function () { return Promise.resolve({}); }, text: function () { return Promise.resolve(""); } }); },
+    XMLHttpRequest: function () { return { open: function (m, u) { report.network.push({ kind: "xhr", url: resolve(u) }); }, send: function () {}, setRequestHeader: function () {}, addEventListener: function () {} }; },
+    WebSocket: function (u) { report.network.push({ kind: "websocket", url: resolve(u) }); return { send: function () {}, close: function () {} }; },
+    eval: recordEval, Function: FunctionStub,
+    setTimeout: function (fn) { if (typeof fn === "string") report.evals.push(fn); return 0; },
+    setInterval: function (fn) { if (typeof fn === "string") report.evals.push(fn); return 0; },
+    addEventListener: function () {}, console: { log: function () {}, warn: function () {}, error: function () {} }
+  };
+  win.window = win; win.self = win; win.globalThis = win; win.top = win;
+  var params = { window: win, self: win, globalThis: win, document: documentShim, location: locationProxy, navigator: win.navigator, fetch: win.fetch, XMLHttpRequest: win.XMLHttpRequest, WebSocket: win.WebSocket, eval: recordEval, Function: FunctionStub, atob: safeAtob, btoa: safeBtoa, setTimeout: win.setTimeout, setInterval: win.setInterval, localStorage: win.localStorage, console: win.console };
+  var keys = Object.keys(params), vals = keys.map(function (k) { return params[k]; });
+  var list = Array.isArray(scripts) ? scripts.slice(0, 64) : [];
+  for (var i = 0; i < list.length; i++) {
+    var script = list[i];
+    if (typeof script !== "string" || script.length > 262144) { report.errors.push("script skipped"); continue; }
+    try { Function.apply(null, keys.concat([script])).apply(null, vals); }
+    catch (e) { report.errors.push(e && e.message ? e.message : "script error"); }
+  }
+  return report;
+}
+`;
+
+let compiledRecorder: ((scripts: string[], url?: string) => BehaviorReport) | null = null;
+function inProcessRecorder(): (scripts: string[], url?: string) => BehaviorReport {
+  if (!compiledRecorder) {
+    // eslint-disable-next-line no-new-func
+    compiledRecorder = new Function(`${RECORDER_SOURCE}\nreturn recordBehavior;`)() as (scripts: string[], url?: string) => BehaviorReport;
+  }
+  return compiledRecorder;
+}
 
 /** Extract inline <script> bodies (no src) from HTML. */
 export function extractInlineScripts(html: string): string[] {
@@ -62,39 +124,37 @@ export function extractInlineScripts(html: string): string[] {
 }
 
 /**
- * Run inline scripts against the recording shim and return what they attempted.
- * Pure recording — no network egress, no real eval, no real navigation.
+ * In-process default evaluator. Runs the recorder in THIS isolate (no boundary).
+ * Use analyzeDynamicWith with a caller-supplied evaluator when isolation matters.
  */
 export function runInstrumented(scripts: string[], options: DynamicAnalysisOptions = {}): BehaviorReport {
-  const report: BehaviorReport = { redirects: [], network: [], writes: [], evals: [], decoded: [], cookies: [], errors: [] };
-  const maxScripts = options.maxScripts ?? DEFAULT_MAX_SCRIPTS;
-  const maxChars = options.maxScriptChars ?? DEFAULT_MAX_SCRIPT_CHARS;
-  const sandbox = buildSandbox(report, options.url);
-
-  for (const script of scripts.slice(0, maxScripts)) {
-    if (script.length > maxChars) {
-      report.errors.push("script too large");
-      continue;
-    }
-    try {
-      // Shadow the dangerous globals with recorder stubs. References in the
-      // script body resolve to these params, not the host isolate's globals.
-      // NOT strict mode on purpose: strict forbids a parameter named `eval`,
-      // and shadowing `eval`/`Function` is precisely how we record them.
-      const runner = new Function(...Object.keys(sandbox), script);
-      runner(...Object.values(sandbox));
-    } catch (error) {
-      report.errors.push(error instanceof Error ? error.message : "script error");
-    }
+  try {
+    return inProcessRecorder()(scripts, options.url);
+  } catch (error) {
+    return { ...EMPTY_REPORT, errors: [error instanceof Error ? error.message : "recorder failed"] };
   }
-  return report;
 }
 
-/** Full pass: extract inline scripts, record behavior, and turn it into findings. */
+/** Full in-process pass: extract inline scripts, record behavior, turn it into findings. */
 export function analyzeDynamic(html: string, options: DynamicAnalysisOptions = {}): { report: BehaviorReport; findings: Finding[] } {
   const report = runInstrumented(extractInlineScripts(html), options);
   return { report, findings: behaviorFindings(report, options.url) };
 }
+
+/** Generic seam: the caller supplies how scripts are evaluated (in whatever isolate it has). */
+export async function analyzeDynamicWith(
+  html: string,
+  options: DynamicAnalysisOptions,
+  evaluate: IsolatedEvaluator
+): Promise<{ report: BehaviorReport; findings: Finding[] }> {
+  const scripts = extractInlineScripts(html);
+  const report = scripts.length ? await evaluate(scripts, options) : EMPTY_REPORT;
+  return { report, findings: behaviorFindings(report, options.url) };
+}
+
+const EXFIL_SCORE: RuleScoreModel = { base: 72, tags: ["exfiltration", "script"] };
+const REDIRECT_SCORE: RuleScoreModel = { base: 45, tags: ["redirect", "script"] };
+const EVAL_SCORE: RuleScoreModel = { base: 30, tags: ["obfuscation", "script"] };
 
 /** Map recorded behavior to scanner findings, re-scanning injected markup and decoded/eval'd code. */
 export function behaviorFindings(report: BehaviorReport, baseUrl?: string): Finding[] {
@@ -132,195 +192,11 @@ export function behaviorFindings(report: BehaviorReport, baseUrl?: string): Find
   return findings;
 }
 
-// Self-contained ES module (plain JS, no imports) to load into a Cloudflare
-// Dynamic Worker / ephemeral isolate. It POSTs {scripts, url} -> BehaviorReport.
-// Load it with `globalOutbound: null` and no env so even a full sandbox escape
-// is contained: no network, no bindings, nothing to exfiltrate — the worst a
-// hostile script can do is skew its own scan. The parent calls behaviorFindings
-// on the returned report (the safe static re-scan stays in the parent).
-export const DYNAMIC_SANDBOX_WORKER = `
-export default {
-  async fetch(request) {
-    let scripts = [], url = undefined;
-    try { const body = await request.json(); scripts = Array.isArray(body.scripts) ? body.scripts : []; url = body.url; } catch (e) {}
-    const report = { redirects: [], network: [], writes: [], evals: [], decoded: [], cookies: [], errors: [] };
-    const resolve = (v) => { const raw = String(v == null ? "" : v); try { return url ? new URL(raw, url).toString() : raw; } catch (e) { return raw; } };
-    const recordEval = (c) => { report.evals.push(String(c)); return undefined; };
-    const FunctionStub = function () { const a = arguments; report.evals.push(String(a[a.length - 1] == null ? "" : a[a.length - 1])); return function () {}; };
-    const locationProxy = new Proxy({ href: url || "", assign: (u) => report.redirects.push(resolve(u)), replace: (u) => report.redirects.push(resolve(u)), reload() {}, toString: () => url || "" }, { set(t, p, val) { if (p === "href") report.redirects.push(resolve(val)); t[p] = val; return true; } });
-    const makeElement = (tag) => {
-      const el = { tagName: String(tag).toUpperCase(), style: {}, children: [], attributes: {} };
-      let s = "", a = "";
-      Object.defineProperty(el, "src", { get: () => s, set: (v) => { s = String(v); report.network.push({ kind: el.tagName === "IMG" ? "image" : "script", url: resolve(v) }); } });
-      Object.defineProperty(el, "action", { get: () => a, set: (v) => { a = String(v); report.network.push({ kind: "form", url: resolve(v) }); } });
-      Object.defineProperty(el, "innerHTML", { get: () => "", set: (v) => report.writes.push(String(v)) });
-      el.setAttribute = (k, v) => { if (k === "src") el.src = v; else if (k === "action") el.action = v; else el.attributes[k] = v; };
-      el.appendChild = (c) => c; el.addEventListener = () => {};
-      return el;
-    };
-    const documentShim = { write: function () { report.writes.push(Array.prototype.map.call(arguments, String).join("")); }, writeln: function () { report.writes.push(Array.prototype.map.call(arguments, String).join("")); }, createElement: (t) => makeElement(String(t)), getElementById: () => null, getElementsByTagName: () => [], querySelector: () => null, querySelectorAll: () => [], addEventListener: () => {}, body: makeElement("body"), head: makeElement("head"), location: locationProxy };
-    Object.defineProperty(documentShim, "cookie", { get: () => "", set: (v) => report.cookies.push(String(v)) });
-    const win = {
-      document: documentShim, location: locationProxy,
-      navigator: { userAgent: "Mozilla/5.0", platform: "Win32", language: "en-US", sendBeacon: (u) => { report.network.push({ kind: "beacon", url: resolve(u) }); return true; } },
-      screen: { width: 1920, height: 1080 },
-      localStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
-      sessionStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
-      atob: (v) => { let out; try { out = atob(String(v)); } catch (e) { out = String(v); } report.decoded.push(out); return out; },
-      btoa: (v) => { try { return btoa(String(v)); } catch (e) { return String(v); } },
-      fetch: (u) => { report.network.push({ kind: "fetch", url: resolve(u) }); return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}), text: () => Promise.resolve("") }); },
-      XMLHttpRequest: class { open(m, u) { report.network.push({ kind: "xhr", url: resolve(u) }); } send() {} setRequestHeader() {} addEventListener() {} },
-      WebSocket: class { constructor(u) { report.network.push({ kind: "websocket", url: resolve(u) }); } send() {} close() {} },
-      eval: recordEval, Function: FunctionStub,
-      setTimeout: (fn) => { if (typeof fn === "string") report.evals.push(fn); return 0; },
-      setInterval: (fn) => { if (typeof fn === "string") report.evals.push(fn); return 0; },
-      addEventListener: () => {}, console: { log: () => {}, warn: () => {}, error: () => {} }
-    };
-    win.window = win; win.self = win; win.globalThis = win; win.top = win;
-    const params = { window: win, self: win, globalThis: win, document: documentShim, location: locationProxy, navigator: win.navigator, fetch: win.fetch, XMLHttpRequest: win.XMLHttpRequest, WebSocket: win.WebSocket, eval: recordEval, Function: FunctionStub, atob: win.atob, btoa: win.btoa, setTimeout: win.setTimeout, setInterval: win.setInterval, localStorage: win.localStorage, console: win.console };
-    for (const script of scripts.slice(0, 64)) {
-      if (typeof script !== "string" || script.length > 262144) { report.errors.push("script skipped"); continue; }
-      try { (new Function(...Object.keys(params), script))(...Object.values(params)); }
-      catch (e) { report.errors.push(e && e.message ? e.message : "script error"); }
-    }
-    return new Response(JSON.stringify(report), { headers: { "content-type": "application/json" } });
-  }
-};
-`;
-
-// ---- the recording sandbox ------------------------------------------------
-
-function buildSandbox(report: BehaviorReport, baseUrl?: string): Record<string, unknown> {
-  const resolve = (value: unknown): string => {
-    const raw = String(value ?? "");
-    try {
-      return baseUrl ? new URL(raw, baseUrl).toString() : raw;
-    } catch {
-      return raw;
-    }
-  };
-  const net = (kind: NetworkAttempt["kind"]) => (url: unknown) => {
-    report.network.push({ kind, url: resolve(url) });
-    return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}), text: () => Promise.resolve("") });
-  };
-
-  const locationProxy = new Proxy(
-    { href: baseUrl ?? "", assign: (u: unknown) => report.redirects.push(resolve(u)), replace: (u: unknown) => report.redirects.push(resolve(u)), reload() {}, toString: () => baseUrl ?? "" },
-    {
-      set(targetObj, prop, value) {
-        if (prop === "href") report.redirects.push(resolve(value));
-        (targetObj as any)[prop] = value;
-        return true;
-      }
-    }
-  );
-
-  const makeElement = (tag: string): any => {
-    const el: any = { tagName: String(tag).toUpperCase(), style: {}, children: [], attributes: {} };
-    let _src = "";
-    let _action = "";
-    Object.defineProperty(el, "src", { get: () => _src, set: (v) => { _src = String(v); report.network.push({ kind: el.tagName === "IMG" ? "image" : "script", url: resolve(v) }); } });
-    Object.defineProperty(el, "action", { get: () => _action, set: (v) => { _action = String(v); report.network.push({ kind: "form", url: resolve(v) }); } });
-    Object.defineProperty(el, "innerHTML", { get: () => "", set: (v) => { report.writes.push(String(v)); } });
-    el.setAttribute = (k: string, v: unknown) => { if (k === "src") el.src = v; else if (k === "action") el.action = v; else el.attributes[k] = v; };
-    el.appendChild = (c: unknown) => c;
-    el.addEventListener = () => {};
-    return el;
-  };
-
-  const documentShim: any = {
-    write: (...args: unknown[]) => report.writes.push(args.map(String).join("")),
-    writeln: (...args: unknown[]) => report.writes.push(args.map(String).join("")),
-    createElement: (tag: unknown) => makeElement(String(tag)),
-    getElementById: () => null,
-    getElementsByTagName: () => [],
-    querySelector: () => null,
-    querySelectorAll: () => [],
-    addEventListener: () => {},
-    body: makeElement("body"),
-    head: makeElement("head"),
-    location: locationProxy
-  };
-  Object.defineProperty(documentShim, "cookie", { get: () => "", set: (v) => report.cookies.push(String(v)) });
-
-  const recordEval = (code: unknown) => { report.evals.push(String(code)); return undefined; };
-  const FunctionStub = function (...args: unknown[]) { report.evals.push(String(args[args.length - 1] ?? "")); return () => undefined; } as unknown as FunctionConstructor;
-
-  const windowShim: any = {
-    document: documentShim,
-    location: locationProxy,
-    navigator: { userAgent: "Mozilla/5.0", platform: "Win32", language: "en-US" },
-    screen: { width: 1920, height: 1080 },
-    localStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
-    sessionStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
-    atob: (v: unknown) => { const out = base64Decode(String(v)); report.decoded.push(out); return out; },
-    btoa: (v: unknown) => base64Encode(String(v)),
-    fetch: net("fetch"),
-    XMLHttpRequest: class { open(_m: unknown, url: unknown) { report.network.push({ kind: "xhr", url: resolve(url) }); } send() {} setRequestHeader() {} addEventListener() {} },
-    WebSocket: class { constructor(url: unknown) { report.network.push({ kind: "websocket", url: resolve(url) }); } send() {} close() {} },
-    navigatorSendBeacon: (url: unknown) => report.network.push({ kind: "beacon", url: resolve(url) }),
-    eval: recordEval,
-    Function: FunctionStub,
-    setTimeout: (fn: unknown) => { if (typeof fn === "string") report.evals.push(fn); return 0; },
-    setInterval: (fn: unknown) => { if (typeof fn === "string") report.evals.push(fn); return 0; },
-    addEventListener: () => {},
-    console: { log: () => {}, warn: () => {}, error: () => {} }
-  };
-  windowShim.navigator.sendBeacon = (url: unknown) => { report.network.push({ kind: "beacon", url: resolve(url) }); return true; };
-  windowShim.window = windowShim;
-  windowShim.self = windowShim;
-  windowShim.globalThis = windowShim;
-  windowShim.top = windowShim;
-
-  // The exact parameter names that will shadow host globals inside the script.
-  return {
-    window: windowShim,
-    self: windowShim,
-    globalThis: windowShim,
-    document: documentShim,
-    location: locationProxy,
-    navigator: windowShim.navigator,
-    fetch: windowShim.fetch,
-    XMLHttpRequest: windowShim.XMLHttpRequest,
-    WebSocket: windowShim.WebSocket,
-    eval: recordEval,
-    Function: FunctionStub,
-    atob: windowShim.atob,
-    btoa: windowShim.btoa,
-    setTimeout: windowShim.setTimeout,
-    setInterval: windowShim.setInterval,
-    localStorage: windowShim.localStorage,
-    console: windowShim.console
-  };
-}
-
 function isOffOrigin(url: string, baseUrl?: string): boolean {
-  if (!baseUrl) {
-    return /^[a-z]+:\/\//i.test(url);
-  }
+  if (!baseUrl) return /^[a-z]+:\/\//i.test(url);
   try {
     return new URL(url, baseUrl).origin !== new URL(baseUrl).origin;
   } catch {
     return false;
-  }
-}
-
-function base64Decode(value: string): string {
-  try {
-    if (typeof atob === "function") return atob(value);
-    const buf = (globalThis as any).Buffer;
-    return buf ? buf.from(value, "base64").toString("binary") : value;
-  } catch {
-    return value;
-  }
-}
-
-function base64Encode(value: string): string {
-  try {
-    if (typeof btoa === "function") return btoa(value);
-    const buf = (globalThis as any).Buffer;
-    return buf ? buf.from(value, "binary").toString("base64") : value;
-  } catch {
-    return value;
   }
 }
