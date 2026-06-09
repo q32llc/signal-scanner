@@ -17,7 +17,7 @@
 //   - analyzeDynamicWith(html, opts, evaluate): the generic seam — the caller
 //     passes an `evaluate` that produces a BehaviorReport however it likes.
 
-import { createScanner, type Finding, type Severity, type Confidence } from "./index";
+import { createScanner, isAdOrAnalyticsHost, registrableDomainFor, type Finding, type Severity, type Confidence } from "./index";
 import type { RuleScoreModel } from "./rules/types";
 
 export interface NetworkAttempt {
@@ -165,13 +165,16 @@ export function behaviorFindings(report: BehaviorReport, baseUrl?: string): Find
   };
 
   for (const target of report.network) {
-    if (isOffOrigin(target.url, baseUrl)) {
-      add("high", "high", EXFIL_SCORE, "runtime_offsite_exfil", `Runtime ${target.kind} to an off-origin endpoint`, `Page JavaScript issued a ${target.kind} request to a different origin at runtime — a common credential/data exfiltration pattern.`, target.url, { kind: target.kind });
+    // Only a genuinely third-party destination (different registrable domain) that
+    // is NOT a mainstream ad/analytics/CDN host counts as exfil. Legit sites fetch
+    // their own subdomains, gstatic, analytics, etc. at runtime constantly.
+    if (isThirdPartyTarget(target.url, baseUrl)) {
+      add("high", "high", EXFIL_SCORE, "runtime_offsite_exfil", `Runtime ${target.kind} to an unrelated third-party endpoint`, `Page JavaScript issued a ${target.kind} request to an unrelated domain at runtime — a common credential/data exfiltration pattern.`, target.url, { kind: target.kind });
     }
   }
   for (const redirect of report.redirects) {
-    if (isOffOrigin(redirect, baseUrl)) {
-      add("medium", "high", REDIRECT_SCORE, "runtime_offsite_redirect", "JavaScript navigated to a different origin at runtime", "Page JavaScript set location to an off-origin URL — used to cloak content from scanners and route victims onward.", redirect, {});
+    if (isThirdPartyTarget(redirect, baseUrl)) {
+      add("medium", "high", REDIRECT_SCORE, "runtime_offsite_redirect", "JavaScript navigated to an unrelated domain at runtime", "Page JavaScript set location to an unrelated domain — used to cloak content from scanners and route victims onward.", redirect, {});
     }
   }
   if (report.evals.length) {
@@ -192,11 +195,28 @@ export function behaviorFindings(report: BehaviorReport, baseUrl?: string): Find
   return findings;
 }
 
-function isOffOrigin(url: string, baseUrl?: string): boolean {
-  if (!baseUrl) return /^[a-z]+:\/\//i.test(url);
+// A runtime target counts only if it's a different registrable domain than the
+// page AND not a known ad/analytics/CDN host — so a site's own subdomains and
+// mainstream third parties (gstatic, analytics) don't read as exfil.
+function isThirdPartyTarget(url: string, baseUrl?: string): boolean {
+  let absolute: string;
+  let targetHost: string;
   try {
-    return new URL(url, baseUrl).origin !== new URL(baseUrl).origin;
+    const resolved = new URL(url, baseUrl);
+    if (resolved.protocol !== "http:" && resolved.protocol !== "https:") return false;
+    absolute = resolved.toString();
+    targetHost = resolved.hostname.toLowerCase();
   } catch {
     return false;
+  }
+  if (isAdOrAnalyticsHost(absolute)) return false;
+  if (!baseUrl) return true;
+  try {
+    const baseHost = new URL(baseUrl).hostname.toLowerCase();
+    const targetReg = registrableDomainFor(targetHost) ?? targetHost;
+    const baseReg = registrableDomainFor(baseHost) ?? baseHost;
+    return targetReg !== baseReg;
+  } catch {
+    return true;
   }
 }

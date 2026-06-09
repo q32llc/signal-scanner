@@ -860,7 +860,7 @@ function destinationTypeFor(url: URL, host: string): ExtractedUrl["destinationTy
   return "other";
 }
 
-function registrableDomainFor(host: string): string | null {
+export function registrableDomainFor(host: string): string | null {
   if (!host || isIpLiteral(host) || host === "localhost") return null;
   const parts = host.toLowerCase().split(".").filter(Boolean);
   if (parts.length < 2) return host;
@@ -973,7 +973,7 @@ const AD_ANALYTICS_DOMAINS = new Set([
   "facebook.net"
 ]);
 
-function isAdOrAnalyticsHost(normalizedUrl: string): boolean {
+export function isAdOrAnalyticsHost(normalizedUrl: string): boolean {
   try {
     const host = new URL(normalizedUrl).hostname.toLowerCase();
     return AD_ANALYTICS_DOMAINS.has(registrableDomainFor(host) ?? host);

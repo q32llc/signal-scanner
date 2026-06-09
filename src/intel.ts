@@ -108,7 +108,9 @@ export async function checkUrlIntel(input: UrlIntelInput, config: UrlIntelConfig
   }
 
   const ctx: IntelContext = {
-    fetch: config.fetchImpl ?? globalThis.fetch,
+    // Must be bound to globalThis: calling it as ctx.fetch(...) otherwise makes
+    // `this` the context object, which Cloudflare rejects (Illegal Invocation).
+    fetch: config.fetchImpl ?? globalThis.fetch.bind(globalThis),
     timeoutMs: config.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     userAgent: config.userAgent ?? DEFAULT_USER_AGENT,
     googleSafeBrowsingKey: config.googleSafeBrowsingKey,
