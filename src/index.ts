@@ -1056,13 +1056,27 @@ function unrelatedBrandInUrl(url: ExtractedUrl): string | null {
   } catch {
     return null;
   }
-  const labels = host.split(/[.\-_]/).filter(Boolean);
-  // Raw labels plus leet/homoglyph-normalized variants (both "1" readings).
-  const variants = [...new Set(labels.flatMap((label) => [label, deleet(label, "i"), deleet(label, "l")]))].filter(Boolean);
+  const registrable = registrableDomainFor(host) ?? host;
+  // Subdomain portion (everything left of the registrable domain) and the
+  // registrable's main label.
+  const subPart = host.endsWith(registrable) ? host.slice(0, host.length - registrable.length).replace(/\.$/, "") : host;
+  const subLabels = subPart ? subPart.split(/[.\-_]/).filter(Boolean) : [];
+  const subVariants = [...new Set(subLabels.flatMap((label) => [label, deleet(label, "i"), deleet(label, "l")]))];
+  const mainLabel = registrable.split(".")[0] ?? "";
+  const mainVariants = [deleet(mainLabel, "i"), deleet(mainLabel, "l")];
+
   for (const { brand, keywords, allowed } of PHISH_BRANDS) {
     if (allowed.test(host)) continue;
-    const hit = keywords.some((kw) => variants.some((label) => label === kw || (kw.length >= 6 && label.startsWith(kw))));
-    if (hit) return brand;
+    for (const kw of keywords) {
+      // Brand in a SUBDOMAIN label => impersonation (paypal.com.evil.xyz,
+      // coinbase_v_login.godaddysites.com, scotiawealth*.cobblestonesw.com).
+      if (subVariants.some((label) => label === kw || (kw.length >= 6 && label.startsWith(kw)))) return brand;
+      // Brand as a leet/homoglyph typosquat of the apex label (g00gle.com,
+      // paypa1.net). An EXACT brand apex label (google.com, google.co.uk) is the
+      // brand's own domain and is intentionally not flagged here — that keeps
+      // ccTLDs from reading as impersonation.
+      if (mainLabel !== kw && mainVariants.includes(kw)) return brand;
+    }
   }
   return null;
 }
