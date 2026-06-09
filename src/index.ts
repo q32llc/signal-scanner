@@ -743,6 +743,9 @@ function addUrl(state: ScannerState, raw: string): void {
   if (brand && isSourceOrFinalUrl(state, normalized.normalized)) {
     addRuleFinding(state, urlRules.brand_impersonation_url, normalized.normalized, { brand });
   }
+  if (isSourceOrFinalUrl(state, normalized.normalized) && isCredentialPathOnSuspiciousHost(normalized)) {
+    addRuleFinding(state, urlRules.credential_path_on_suspicious_host, normalized.normalized, {});
+  }
   if (isSourceOrFinalUrl(state, normalized.normalized) && isGeneratedSuspiciousLandingUrl(normalized)) {
     addRuleFinding(state, urlRules.generated_landing_url, normalized.normalized, {});
   }
@@ -893,10 +896,20 @@ function isSharedHostingSubdomain(host: string, registrableDomain: string | null
     "render.com",
     "glitch.me",
     "replit.app",
+    "replit.dev",
     "wordpress.com",
     "blogspot.com",
     "weebly.com",
-    "myshopify.com"
+    "myshopify.com",
+    "godaddysites.com",
+    "zapier.app",
+    "fwh.is",
+    "infinityfreeapp.com",
+    "000webhostapp.com",
+    "fly.dev",
+    "onrender.com",
+    "surge.sh",
+    "site.je"
   ].includes(registrableDomain);
 }
 
@@ -917,31 +930,67 @@ function isMalwareDownloadLikePath(pathname: string): boolean {
   return /(?:\/|^)(?:bin|bins|payload|update|loader|bot|mozi|mirai|gafgyt|boatnet|dvr)(?:[./_-]|$)|\.(?:sh|bash|elf|bin|mips|mpsl|arm\d?|x86|x86_64|i686|ppc|sparc)(?:$|[?#])|(?:\/|^)(?:mips|arm\d?|x86|x86_64|i686|ppc|sparc)(?:$|[./_-])/i.test(pathname);
 }
 
+// Brand keywords + the brand's legitimate registrable domains. Matched against
+// HOST LABELS only (never the path/query — so google.com/search?q=paypal is
+// safe), as an exact label or, for >=6-char keywords, a label prefix to catch
+// concatenated lookalikes like "scotiawealthmanagement.com.evil.tld".
+const PHISH_BRANDS: Array<{ brand: string; keywords: string[]; allowed: RegExp }> = [
+  { brand: "google", keywords: ["google", "gmail"], allowed: /(?:^|\.)(?:google|gmail)\.(?:com|[a-z]{2})$/i },
+  { brand: "microsoft", keywords: ["microsoft", "office365", "outlook", "onedrive"], allowed: /(?:^|\.)(?:microsoft|microsoftonline|live|office|outlook|sharepoint)\.com$/i },
+  { brand: "apple", keywords: ["icloud", "appleid"], allowed: /(?:^|\.)(?:apple|icloud)\.com$/i },
+  { brand: "paypal", keywords: ["paypal", "paypa1"], allowed: /(?:^|\.)paypal\.(?:com|[a-z]{2})$/i },
+  { brand: "amazon", keywords: ["amazon"], allowed: /(?:^|\.)(?:amazon\.[a-z.]{2,6}|amazonaws\.com|aws\.amazon\.com)$/i },
+  { brand: "netflix", keywords: ["netflix"], allowed: /(?:^|\.)netflix\.com$/i },
+  { brand: "facebook", keywords: ["facebook"], allowed: /(?:^|\.)(?:facebook|meta)\.com$/i },
+  { brand: "instagram", keywords: ["instagram"], allowed: /(?:^|\.)instagram\.com$/i },
+  { brand: "whatsapp", keywords: ["whatsapp"], allowed: /(?:^|\.)whatsapp\.com$/i },
+  { brand: "linkedin", keywords: ["linkedin"], allowed: /(?:^|\.)linkedin\.com$/i },
+  { brand: "dropbox", keywords: ["dropbox"], allowed: /(?:^|\.)dropbox\.com$/i },
+  { brand: "docusign", keywords: ["docusign"], allowed: /(?:^|\.)docusign\.(?:com|net)$/i },
+  { brand: "wetransfer", keywords: ["wetransfer"], allowed: /(?:^|\.)wetransfer\.com$/i },
+  { brand: "dhl", keywords: ["dhl"], allowed: /(?:^|\.)dhl\.(?:com|[a-z]{2})$/i },
+  { brand: "fedex", keywords: ["fedex"], allowed: /(?:^|\.)fedex\.com$/i },
+  { brand: "usps", keywords: ["usps"], allowed: /(?:^|\.)usps\.com$/i },
+  { brand: "roblox", keywords: ["roblox"], allowed: /(?:^|\.)roblox\.com$/i },
+  { brand: "steam", keywords: ["steamcommunity", "steampowered"], allowed: /(?:^|\.)steam(?:community|powered)\.com$/i },
+  { brand: "scotiabank", keywords: ["scotiabank", "scotiawealth", "scotiaonline"], allowed: /(?:^|\.)scotiabank\.com$/i },
+  { brand: "wellsfargo", keywords: ["wellsfargo"], allowed: /(?:^|\.)wellsfargo\.com$/i },
+  { brand: "chase", keywords: ["chase"], allowed: /(?:^|\.)chase\.com$/i },
+  { brand: "bankofamerica", keywords: ["bankofamerica"], allowed: /(?:^|\.)bankofamerica\.com$/i },
+  { brand: "citi", keywords: ["citibank", "citigroup"], allowed: /(?:^|\.)citi\.com$/i },
+  { brand: "coinbase", keywords: ["coinbase"], allowed: /(?:^|\.)coinbase\.com$/i },
+  { brand: "binance", keywords: ["binance"], allowed: /(?:^|\.)binance\.(?:com|us)$/i },
+  { brand: "kraken", keywords: ["kraken"], allowed: /(?:^|\.)kraken\.com$/i },
+  { brand: "metamask", keywords: ["metamask"], allowed: /(?:^|\.)metamask\.io$/i },
+  { brand: "ledger", keywords: ["ledger"], allowed: /(?:^|\.)ledger\.com$/i },
+  { brand: "tangem", keywords: ["tangem"], allowed: /(?:^|\.)tangem\.com$/i },
+  { brand: "etoro", keywords: ["etoro"], allowed: /(?:^|\.)etoro\.com$/i },
+  { brand: "ionos", keywords: ["ionos"], allowed: /(?:^|\.)ionos\.(?:com|de|co\.uk)$/i },
+  { brand: "allegro", keywords: ["allegro"], allowed: /(?:^|\.)allegro\.(?:pl|com)$/i }
+];
+
 function unrelatedBrandInUrl(url: ExtractedUrl): string | null {
-  const haystack = `${url.normalized} ${url.raw}`.toLowerCase();
-  const brands: Array<[string, RegExp, RegExp]> = [
-    ["google", /\bgoogle\b|gmail|g00gle/i, /(?:^|\.)google\.(?:com|[a-z]{2})$/i],
-    ["microsoft", /\bmicrosoft\b|office365|outlook|hotmail|onedrive/i, /(?:^|\.)(?:microsoft|live|office|outlook)\.com$/i],
-    ["apple", /\bapple\b|icloud/i, /(?:^|\.)apple\.com$/i],
-    ["paypal", /\bpaypal\b|paypa1/i, /(?:^|\.)paypal\.com$/i],
-    ["facebook", /\bfacebook\b|face-book|meta-login/i, /(?:^|\.)(?:facebook|meta)\.com$/i],
-    ["whatsapp", /whatsapp|whatsaplus|whatsap/i, /(?:^|\.)whatsapp\.com$/i],
-    ["roblox", /\broblox\b/i, /(?:^|\.)roblox\.com$/i],
-    ["allegro", /\ballegro\b/i, /(?:^|\.)allegro\.(?:pl|com)$/i],
-    ["ionos", /\bionos\b/i, /(?:^|\.)ionos\.(?:com|de|co\.uk)$/i],
-    ["ledger", /\bledger\b|ledgr/i, /(?:^|\.)ledger\.com$/i],
-    ["tangem", /\btangem\b|tangam/i, /(?:^|\.)tangem\.com$/i],
-    ["etoro", /\betoro\b|etorro/i, /(?:^|\.)etoro\.com$/i],
-    ["coinbase", /\bcoinbase\b/i, /(?:^|\.)coinbase\.com$/i],
-    ["metamask", /\bmetamask\b/i, /(?:^|\.)metamask\.io$/i],
-    ["chase", /\bchase\b/i, /(?:^|\.)chase\.com$/i],
-    ["bankofamerica", /bankofamerica|bank-of-america|bofa/i, /(?:^|\.)bankofamerica\.com$/i]
-  ];
-  const host = new URL(url.normalized).hostname.toLowerCase();
-  for (const [brand, pattern, allowedDomain] of brands) {
-    if (pattern.test(haystack) && !allowedDomain.test(host)) return brand;
+  let host: string;
+  try {
+    host = new URL(url.normalized).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+  const labels = host.split(/[.\-_]/).filter(Boolean);
+  for (const { brand, keywords, allowed } of PHISH_BRANDS) {
+    if (allowed.test(host)) continue;
+    const hit = keywords.some((kw) => labels.some((label) => label === kw || (kw.length >= 6 && label.startsWith(kw))));
+    if (hit) return brand;
   }
   return null;
+}
+
+const SUSPICIOUS_HOST_FLAGS = ["shared_hosting_subdomain", "generated_host_label", "suspicious_tld", "punycode", "ip_literal", "url_shortener"];
+
+// Login/account/verify path served from a host that legitimate brands never use
+// for credentials. Render-free — fires on the URL alone, before any form loads.
+function isCredentialPathOnSuspiciousHost(url: ExtractedUrl): boolean {
+  return url.flags.includes("suspicious_path_terms") && url.flags.some((flag) => SUSPICIOUS_HOST_FLAGS.includes(flag));
 }
 
 function isGeneratedSuspiciousLandingUrl(url: ExtractedUrl): boolean {

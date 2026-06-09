@@ -271,7 +271,7 @@ test("detects brand impersonation from URL before page fetch succeeds", () => {
 
   expect(report.findings.map((finding) => finding.ruleId)).toEqual(expect.arrayContaining(["brand_impersonation_url"]));
   expect(report.findings.find((finding) => finding.ruleId === "brand_impersonation_url")?.metadata.brand).toBe("ionos");
-  expect(report.disposition).toBe("warn");
+  expect(report.disposition).toBe("review");
 });
 
 test("detects generated suspicious landing URLs before page fetch succeeds", () => {

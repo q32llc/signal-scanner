@@ -108,11 +108,21 @@ export const urlRules: Record<
     id: "brand_impersonation_url",
     pack: "phishing",
     severity: "high",
-    confidence: "medium",
-    title: "Brand term on unrelated domain",
-    description: "URL contains a known brand term while the registrable domain does not belong to that brand.",
+    confidence: "high",
+    title: "Brand name in host of an unrelated domain",
+    description: "A well-known brand appears in the hostname while the registrable domain does not belong to that brand — a hallmark of credential-phishing lookalike hosts.",
     locationType: "url",
-    score: { base: 30, tags: ["phishing", "url"] }
+    score: { base: 68, tags: ["phishing", "url"] }
+  },
+  credential_path_on_suspicious_host: {
+    id: "credential_path_on_suspicious_host",
+    pack: "phishing",
+    severity: "high",
+    confidence: "high",
+    title: "Login/account path on a suspicious host",
+    description: "A login, sign-in, account, or verification path is served from a free-hosting subdomain, generated host label, suspicious TLD, punycode, IP literal, or URL shortener — where legitimate brands do not host credentials.",
+    locationType: "url",
+    score: { base: 66, tags: ["credential", "phishing", "url"] }
   },
   generated_landing_url: {
     id: "generated_landing_url",
