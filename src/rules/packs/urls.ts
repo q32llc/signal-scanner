@@ -11,6 +11,7 @@ export const urlRules: Record<
   | "malware_download_like_url"
   | "shared_hosting_subdomain_url"
   | "brand_impersonation_url"
+  | "credential_path_on_suspicious_host"
   | "generated_landing_url",
   RuleDefinition
 > = {
