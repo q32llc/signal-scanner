@@ -132,6 +132,62 @@ export function behaviorFindings(report: BehaviorReport, baseUrl?: string): Find
   return findings;
 }
 
+// Self-contained ES module (plain JS, no imports) to load into a Cloudflare
+// Dynamic Worker / ephemeral isolate. It POSTs {scripts, url} -> BehaviorReport.
+// Load it with `globalOutbound: null` and no env so even a full sandbox escape
+// is contained: no network, no bindings, nothing to exfiltrate — the worst a
+// hostile script can do is skew its own scan. The parent calls behaviorFindings
+// on the returned report (the safe static re-scan stays in the parent).
+export const DYNAMIC_SANDBOX_WORKER = `
+export default {
+  async fetch(request) {
+    let scripts = [], url = undefined;
+    try { const body = await request.json(); scripts = Array.isArray(body.scripts) ? body.scripts : []; url = body.url; } catch (e) {}
+    const report = { redirects: [], network: [], writes: [], evals: [], decoded: [], cookies: [], errors: [] };
+    const resolve = (v) => { const raw = String(v == null ? "" : v); try { return url ? new URL(raw, url).toString() : raw; } catch (e) { return raw; } };
+    const recordEval = (c) => { report.evals.push(String(c)); return undefined; };
+    const FunctionStub = function () { const a = arguments; report.evals.push(String(a[a.length - 1] == null ? "" : a[a.length - 1])); return function () {}; };
+    const locationProxy = new Proxy({ href: url || "", assign: (u) => report.redirects.push(resolve(u)), replace: (u) => report.redirects.push(resolve(u)), reload() {}, toString: () => url || "" }, { set(t, p, val) { if (p === "href") report.redirects.push(resolve(val)); t[p] = val; return true; } });
+    const makeElement = (tag) => {
+      const el = { tagName: String(tag).toUpperCase(), style: {}, children: [], attributes: {} };
+      let s = "", a = "";
+      Object.defineProperty(el, "src", { get: () => s, set: (v) => { s = String(v); report.network.push({ kind: el.tagName === "IMG" ? "image" : "script", url: resolve(v) }); } });
+      Object.defineProperty(el, "action", { get: () => a, set: (v) => { a = String(v); report.network.push({ kind: "form", url: resolve(v) }); } });
+      Object.defineProperty(el, "innerHTML", { get: () => "", set: (v) => report.writes.push(String(v)) });
+      el.setAttribute = (k, v) => { if (k === "src") el.src = v; else if (k === "action") el.action = v; else el.attributes[k] = v; };
+      el.appendChild = (c) => c; el.addEventListener = () => {};
+      return el;
+    };
+    const documentShim = { write: function () { report.writes.push(Array.prototype.map.call(arguments, String).join("")); }, writeln: function () { report.writes.push(Array.prototype.map.call(arguments, String).join("")); }, createElement: (t) => makeElement(String(t)), getElementById: () => null, getElementsByTagName: () => [], querySelector: () => null, querySelectorAll: () => [], addEventListener: () => {}, body: makeElement("body"), head: makeElement("head"), location: locationProxy };
+    Object.defineProperty(documentShim, "cookie", { get: () => "", set: (v) => report.cookies.push(String(v)) });
+    const win = {
+      document: documentShim, location: locationProxy,
+      navigator: { userAgent: "Mozilla/5.0", platform: "Win32", language: "en-US", sendBeacon: (u) => { report.network.push({ kind: "beacon", url: resolve(u) }); return true; } },
+      screen: { width: 1920, height: 1080 },
+      localStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
+      sessionStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
+      atob: (v) => { let out; try { out = atob(String(v)); } catch (e) { out = String(v); } report.decoded.push(out); return out; },
+      btoa: (v) => { try { return btoa(String(v)); } catch (e) { return String(v); } },
+      fetch: (u) => { report.network.push({ kind: "fetch", url: resolve(u) }); return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}), text: () => Promise.resolve("") }); },
+      XMLHttpRequest: class { open(m, u) { report.network.push({ kind: "xhr", url: resolve(u) }); } send() {} setRequestHeader() {} addEventListener() {} },
+      WebSocket: class { constructor(u) { report.network.push({ kind: "websocket", url: resolve(u) }); } send() {} close() {} },
+      eval: recordEval, Function: FunctionStub,
+      setTimeout: (fn) => { if (typeof fn === "string") report.evals.push(fn); return 0; },
+      setInterval: (fn) => { if (typeof fn === "string") report.evals.push(fn); return 0; },
+      addEventListener: () => {}, console: { log: () => {}, warn: () => {}, error: () => {} }
+    };
+    win.window = win; win.self = win; win.globalThis = win; win.top = win;
+    const params = { window: win, self: win, globalThis: win, document: documentShim, location: locationProxy, navigator: win.navigator, fetch: win.fetch, XMLHttpRequest: win.XMLHttpRequest, WebSocket: win.WebSocket, eval: recordEval, Function: FunctionStub, atob: win.atob, btoa: win.btoa, setTimeout: win.setTimeout, setInterval: win.setInterval, localStorage: win.localStorage, console: win.console };
+    for (const script of scripts.slice(0, 64)) {
+      if (typeof script !== "string" || script.length > 262144) { report.errors.push("script skipped"); continue; }
+      try { (new Function(...Object.keys(params), script))(...Object.values(params)); }
+      catch (e) { report.errors.push(e && e.message ? e.message : "script error"); }
+    }
+    return new Response(JSON.stringify(report), { headers: { "content-type": "application/json" } });
+  }
+};
+`;
+
 // ---- the recording sandbox ------------------------------------------------
 
 function buildSandbox(report: BehaviorReport, baseUrl?: string): Record<string, unknown> {
