@@ -274,6 +274,15 @@ test("detects brand impersonation from URL before page fetch succeeds", () => {
   expect(report.disposition).toBe("review");
 });
 
+test("detects leetspeak/homoglyph brand impersonation in the host", () => {
+  const scanner = createScanner({ source: { url: "https://secure-paypa1-login.verify-acct.xyz/" } });
+  const report = scanner.finish();
+  expect(report.findings.find((finding) => finding.ruleId === "brand_impersonation_url")?.metadata.brand).toBe("paypal");
+
+  const ms = createScanner({ source: { url: "https://0utlook-micr0s0ft-mail.account-verify.cc/" } });
+  expect(ms.finish().findings.find((finding) => finding.ruleId === "brand_impersonation_url")?.metadata.brand).toBe("microsoft");
+});
+
 test("detects generated suspicious landing URLs before page fetch succeeds", () => {
   const scanner = createScanner({ source: { url: "https://gysxrbg.winstone.casino/c0bd7510-5047-4056-b382-60b3f7cc19de" } });
   const report = scanner.finish();

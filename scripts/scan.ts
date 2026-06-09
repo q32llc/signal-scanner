@@ -12,7 +12,9 @@ const MAX_TOTAL_BYTES = 32 * 1024 * 1024;
 const MAX_SITEMAP_URLS = 512;
 const REQUEST_TIMEOUT_MS = 10_000;
 const DEFAULT_PARALLEL = 10;
-const USER_AGENT = "@q32/signal-scanner-cli/0.1";
+// A real browser UA so cloaking kits (which serve benign pages to obvious
+// scanners) reveal their actual content.
+const USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
 interface TargetReport {
   target: string;

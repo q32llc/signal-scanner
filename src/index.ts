@@ -969,6 +969,25 @@ const PHISH_BRANDS: Array<{ brand: string; keywords: string[]; allowed: RegExp }
   { brand: "allegro", keywords: ["allegro"], allowed: /(?:^|\.)allegro\.(?:pl|com)$/i }
 ];
 
+// Normalize leetspeak / homoglyph substitutions so g00gle, paypa1, micr0s0ft,
+// 0utlook, faceb00k collapse onto their brand spelling. "1" is ambiguous (i or
+// l), so callers check both variants. Non-alphanumerics are dropped last.
+function deleet(label: string, one: "i" | "l"): string {
+  return label
+    .replace(/0/g, "o")
+    .replace(/1/g, one)
+    .replace(/3/g, "e")
+    .replace(/4/g, "a")
+    .replace(/5/g, "s")
+    .replace(/7/g, "t")
+    .replace(/8/g, "b")
+    .replace(/9/g, "g")
+    .replace(/\$/g, "s")
+    .replace(/@/g, "a")
+    .replace(/!/g, "i")
+    .replace(/[^a-z]/g, "");
+}
+
 function unrelatedBrandInUrl(url: ExtractedUrl): string | null {
   let host: string;
   try {
@@ -977,9 +996,11 @@ function unrelatedBrandInUrl(url: ExtractedUrl): string | null {
     return null;
   }
   const labels = host.split(/[.\-_]/).filter(Boolean);
+  // Raw labels plus leet/homoglyph-normalized variants (both "1" readings).
+  const variants = [...new Set(labels.flatMap((label) => [label, deleet(label, "i"), deleet(label, "l")]))].filter(Boolean);
   for (const { brand, keywords, allowed } of PHISH_BRANDS) {
     if (allowed.test(host)) continue;
-    const hit = keywords.some((kw) => labels.some((label) => label === kw || (kw.length >= 6 && label.startsWith(kw))));
+    const hit = keywords.some((kw) => variants.some((label) => label === kw || (kw.length >= 6 && label.startsWith(kw))));
     if (hit) return brand;
   }
   return null;
