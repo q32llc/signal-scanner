@@ -27,6 +27,10 @@
     "./feeds": {
       "types": "./src/feeds.ts",
       "default": "./src/feeds.ts"
+    },
+    "./dynamic": {
+      "types": "./src/dynamic.ts",
+      "default": "./src/dynamic.ts"
     }
   },
   "sideEffects": false
