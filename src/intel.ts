@@ -239,17 +239,52 @@ async function queryUrlhausHost(host: string, ctx: IntelContext): Promise<IntelM
   if (isPrivateOrLocalHost(host)) return null;
   const response = await postForm("https://urlhaus-api.abuse.ch/v1/host/", { host }, ctx);
   if (!response || response.query_status !== "ok") return null;
+  const urls: any[] = Array.isArray(response.urls) ? response.urls : [];
+  // A host appearing in URLhaus is not automatically malware infrastructure:
+  // popular hosts (open redirectors, file hosts) collect entries when a single
+  // URL is abused. Score by how live and how recent the evidence is — a dead,
+  // years-old entry on an otherwise-legitimate host is weak signal, while a
+  // currently-online recent listing is a strong conviction.
+  const { score, basis, onlineCount } = urlhausHostStrength(urls);
   return {
     source: "urlhaus",
     provider: "URLhaus",
     host,
-    score: LIVE_INTEL_SCORE,
+    score,
     detail: {
       query_status: response.query_status,
-      url_count: Array.isArray(response.urls) ? response.urls.length : 0,
-      sample: Array.isArray(response.urls) ? response.urls.slice(0, 5) : []
+      url_count: urls.length,
+      online_count: onlineCount,
+      score_basis: basis,
+      sample: urls.slice(0, 5)
     }
   };
+}
+
+const RECENT_INTEL_DAYS = 90;
+
+/** Grade a URLhaus host listing by liveness and recency of its URLs. */
+function urlhausHostStrength(urls: any[]): { score: number; basis: string; onlineCount: number } {
+  let anyOnline = false;
+  let recentOnline = false;
+  let recentOffline = false;
+  let onlineCount = 0;
+  for (const u of urls) {
+    const online = String(u?.url_status ?? "").toLowerCase() === "online";
+    const age = daysSince(u?.date_added);
+    const recent = age !== null && age <= RECENT_INTEL_DAYS;
+    if (online) {
+      anyOnline = true;
+      onlineCount += 1;
+      if (recent) recentOnline = true;
+    } else if (recent) {
+      recentOffline = true;
+    }
+  }
+  if (recentOnline) return { score: 95, basis: "online_recent", onlineCount };
+  if (anyOnline) return { score: 75, basis: "online_aged", onlineCount };
+  if (recentOffline) return { score: 45, basis: "offline_recent", onlineCount };
+  return { score: 20, basis: "offline_aged", onlineCount };
 }
 
 async function queryUrlhausUrl(url: string, ctx: IntelContext): Promise<IntelMatch | null> {
@@ -276,6 +311,20 @@ async function queryThreatFoxHost(host: string, ctx: IntelContext): Promise<Inte
   if (isPrivateOrLocalHost(host)) return null;
   const response = await postJson("https://threatfox-api.abuse.ch/api/v1/", { query: "search_ioc", search_term: host }, ctx);
   if (!response || response.query_status !== "ok") return null;
+  const data: any[] = Array.isArray(response.data) ? response.data : [];
+  const target = host.toLowerCase();
+  // ThreatFox `search_ioc` is a SUBSTRING search: querying "google.com" returns
+  // IOCs that merely contain that string — "guard-google.com",
+  // "google.com-x18-...sslip.io", a malware file on "drive.google.com", etc.
+  // None of those make google.com itself malicious. Only domain/IP IOCs whose
+  // host EXACTLY equals the queried host actually convict that host. URL IOCs
+  // flag one path on a (possibly shared) host and are not a host-level verdict.
+  const exact = data.filter((ioc) => {
+    const type = String(ioc?.ioc_type ?? "");
+    if (type !== "domain" && type !== "ip:port" && type !== "ip") return false;
+    return iocHost(ioc?.ioc) === target;
+  });
+  if (!exact.length) return null;
   return {
     source: "threatfox",
     provider: "ThreatFox",
@@ -283,10 +332,27 @@ async function queryThreatFoxHost(host: string, ctx: IntelContext): Promise<Inte
     score: LIVE_INTEL_SCORE,
     detail: {
       query_status: response.query_status,
-      ioc_count: Array.isArray(response.data) ? response.data.length : 0,
-      sample: Array.isArray(response.data) ? response.data.slice(0, 5) : []
+      ioc_count: exact.length,
+      sample: exact.slice(0, 5)
     }
   };
+}
+
+/** Extract a bare host from a ThreatFox IOC string (url, domain, or host:port). */
+function iocHost(ioc: unknown): string | null {
+  if (!ioc) return null;
+  const s = String(ioc).trim();
+  if (s.includes("://")) return hostOf(s);
+  const host = s.split("/")[0].split(":")[0];
+  return host ? host.toLowerCase() : null;
+}
+
+/** Age in days of an abuse.ch timestamp ("2024-11-12 06:08:05 UTC"), or null. */
+function daysSince(value: unknown): number | null {
+  if (!value) return null;
+  const t = Date.parse(String(value).replace(" UTC", "Z").replace(" ", "T"));
+  if (Number.isNaN(t)) return null;
+  return (Date.now() - t) / 86_400_000;
 }
 
 // One batched request covers every discovered URL.

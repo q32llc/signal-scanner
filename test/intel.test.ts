@@ -14,12 +14,16 @@ function stubFetch(handlers: Array<{ match: string; status?: number; json: unkno
   }) as typeof fetch;
 }
 
+const recentDate = new Date(Date.now() - 5 * 86_400_000).toISOString();
+const agedDate = "2023-01-15 09:00:00 UTC";
+
 test("flags a known-bad host via URLhaus and produces a high-severity finding", async () => {
   const report = await checkUrlIntel(
     { urls: ["https://bad.example/payload.exe"] },
     {
       fetchImpl: stubFetch([
-        { match: "urlhaus-api.abuse.ch/v1/host", json: { query_status: "ok", urls: [{ url: "https://bad.example/payload.exe" }] } },
+        // A live, recently-listed URL on the host is a strong conviction.
+        { match: "urlhaus-api.abuse.ch/v1/host", json: { query_status: "ok", urls: [{ url: "https://bad.example/payload.exe", url_status: "online", date_added: recentDate }] } },
         { match: "urlhaus-api.abuse.ch/v1/url", json: { query_status: "ok", threat: "malware_download", url_status: "online" } },
         { match: "threatfox-api.abuse.ch", json: { query_status: "no_result" } },
         { match: "safebrowsing.googleapis.com", json: {} }
@@ -35,6 +39,67 @@ test("flags a known-bad host via URLhaus and produces a high-severity finding", 
   expect(report.findings[0].ruleId).toBe("intel.urlhaus");
   // Safe Browsing returns no matches here => clean, not error (key present).
   expect(report.sources.find((s) => s.source === "google-safebrowsing")?.status).toBe("clean");
+});
+
+test("a dead, years-old URLhaus listing on a host is weak signal, not a conviction", async () => {
+  const report = await checkUrlIntel(
+    { hosts: ["www.google.com"] },
+    {
+      fetchImpl: stubFetch([
+        // An offline URL added years ago (e.g. an abused open redirect) must not
+        // convict an otherwise-legitimate host.
+        { match: "urlhaus-api.abuse.ch/v1/host", json: { query_status: "ok", urls: [{ url: "https://www.google.com/url?q=https://bad.example/x", url_status: "offline", date_added: agedDate }] } },
+        { match: "threatfox-api.abuse.ch", json: { query_status: "no_result" } },
+        { match: "safebrowsing.googleapis.com", json: {} }
+      ]),
+      googleSafeBrowsingKey: "k"
+    }
+  );
+  const match = report.matches.find((m) => m.source === "urlhaus");
+  expect(match?.score).toBeLessThan(40);
+  expect(match?.detail.score_basis).toBe("offline_aged");
+  // No finding should be high/medium severity off this weak evidence.
+  expect(report.findings.every((f) => f.severity === "low" || f.severity === "info")).toBe(true);
+});
+
+test("ThreatFox substring hits on a famous brand do not convict the brand host", async () => {
+  const data = [
+    { ioc: "guard-google.com", ioc_type: "domain", malware_printable: "IClickFix" },
+    { ioc: "google.com-x18-206-188-196-165.sslip.io", ioc_type: "domain", malware_printable: "MintsLoader" },
+    { ioc: "https://drive.google.com/uc?export=download&id=abc", ioc_type: "url", malware_printable: "GuLoader" }
+  ];
+  const report = await checkUrlIntel(
+    { hosts: ["google.com"] },
+    {
+      fetchImpl: stubFetch([
+        { match: "urlhaus-api.abuse.ch/v1/host", json: { query_status: "no_result" } },
+        { match: "threatfox-api.abuse.ch", json: { query_status: "ok", data } },
+        { match: "safebrowsing.googleapis.com", json: {} }
+      ]),
+      googleSafeBrowsingKey: "k"
+    }
+  );
+  // None of the IOCs are exactly google.com, so ThreatFox is clean.
+  expect(report.sources.find((s) => s.source === "threatfox")?.status).toBe("clean");
+  expect(report.matches.filter((m) => m.source === "threatfox")).toEqual([]);
+});
+
+test("ThreatFox convicts when a domain IOC exactly matches the queried host", async () => {
+  const data = [{ ioc: "evil.example", ioc_type: "domain", malware_printable: "Cobalt Strike" }];
+  const report = await checkUrlIntel(
+    { hosts: ["evil.example"] },
+    {
+      fetchImpl: stubFetch([
+        { match: "urlhaus-api.abuse.ch/v1/host", json: { query_status: "no_result" } },
+        { match: "threatfox-api.abuse.ch", json: { query_status: "ok", data } },
+        { match: "safebrowsing.googleapis.com", json: {} }
+      ]),
+      googleSafeBrowsingKey: "k"
+    }
+  );
+  const tf = report.sources.find((s) => s.source === "threatfox");
+  expect(tf?.status).toBe("match");
+  expect(tf?.matches[0]?.detail.ioc_count).toBe(1);
 });
 
 test("reports Google Safe Browsing as an error when no key is configured", async () => {

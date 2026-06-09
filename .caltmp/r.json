@@ -1,0 +1,210 @@
+{
+  "aggregate": {
+    "score": 12,
+    "disposition": "allow",
+    "sha256": "4f2745ca5e65badfa2b78e38c3b5280ecf28d3165b3de3afc3848c219cfa7f29"
+  },
+  "scanned": 10,
+  "summary": {
+    "dispositions": {
+      "allow": 10
+    },
+    "contentKinds": {
+      "html": 10
+    },
+    "errors": {},
+    "rules": {
+      "hidden_link_cluster": 10,
+      "suspicious_tld_url": 1
+    }
+  },
+  "targets": [
+    {
+      "target": "https://medium.com/",
+      "kind": "url",
+      "status": 200,
+      "bytes": 39320,
+      "contentKind": "html",
+      "score": 4,
+      "disposition": "allow",
+      "findings": [
+        {
+          "ruleId": "hidden_link_cluster",
+          "severity": "low",
+          "confidence": "medium",
+          "count": 1,
+          "sample": "https://medium.com/"
+        }
+      ]
+    },
+    {
+      "target": "https://medium.com/@ausus",
+      "kind": "url",
+      "status": 200,
+      "bytes": 90294,
+      "contentKind": "html",
+      "score": 4,
+      "disposition": "allow",
+      "findings": [
+        {
+          "ruleId": "hidden_link_cluster",
+          "severity": "low",
+          "confidence": "medium",
+          "count": 1,
+          "sample": "https://medium.com/@ausus"
+        }
+      ]
+    },
+    {
+      "target": "https://medium.com/@ashvam",
+      "kind": "url",
+      "status": 200,
+      "bytes": 89152,
+      "contentKind": "html",
+      "score": 4,
+      "disposition": "allow",
+      "findings": [
+        {
+          "ruleId": "hidden_link_cluster",
+          "severity": "low",
+          "confidence": "medium",
+          "count": 1,
+          "sample": "https://medium.com/@ashvam"
+        }
+      ]
+    },
+    {
+      "target": "https://medium.com/@ScottGombar",
+      "kind": "url",
+      "status": 200,
+      "bytes": 162527,
+      "contentKind": "html",
+      "score": 4,
+      "disposition": "allow",
+      "findings": [
+        {
+          "ruleId": "hidden_link_cluster",
+          "severity": "low",
+          "confidence": "medium",
+          "count": 1,
+          "sample": "https://medium.com/@ScottGombar"
+        }
+      ]
+    },
+    {
+      "target": "https://rizqieaulia.medium.com/",
+      "kind": "url",
+      "status": 200,
+      "bytes": 182475,
+      "contentKind": "html",
+      "score": 4,
+      "disposition": "allow",
+      "findings": [
+        {
+          "ruleId": "hidden_link_cluster",
+          "severity": "low",
+          "confidence": "medium",
+          "count": 1,
+          "sample": "https://rizqieaulia.medium.com/"
+        }
+      ]
+    },
+    {
+      "target": "https://medium.com/@brideinreverse",
+      "kind": "url",
+      "status": 200,
+      "bytes": 213221,
+      "contentKind": "html",
+      "score": 4,
+      "disposition": "allow",
+      "findings": [
+        {
+          "ruleId": "hidden_link_cluster",
+          "severity": "low",
+          "confidence": "medium",
+          "count": 1,
+          "sample": "https://medium.com/@brideinreverse"
+        }
+      ]
+    },
+    {
+      "target": "https://oshamahue.medium.com/",
+      "kind": "url",
+      "status": 200,
+      "bytes": 181373,
+      "contentKind": "html",
+      "score": 12,
+      "disposition": "allow",
+      "findings": [
+        {
+          "ruleId": "suspicious_tld_url",
+          "severity": "low",
+          "confidence": "medium",
+          "count": 1,
+          "sample": "https://heartbeat.comet.ml/?source=user_profile_page---------7-------------9d967fa37eb3----------------------"
+        },
+        {
+          "ruleId": "hidden_link_cluster",
+          "severity": "low",
+          "confidence": "medium",
+          "count": 1,
+          "sample": "https://oshamahue.medium.com/"
+        }
+      ]
+    },
+    {
+      "target": "https://gpadmanabhan.medium.com/",
+      "kind": "url",
+      "status": 200,
+      "bytes": 184825,
+      "contentKind": "html",
+      "score": 4,
+      "disposition": "allow",
+      "findings": [
+        {
+          "ruleId": "hidden_link_cluster",
+          "severity": "low",
+          "confidence": "medium",
+          "count": 1,
+          "sample": "https://gpadmanabhan.medium.com/"
+        }
+      ]
+    },
+    {
+      "target": "https://jules000120.medium.com/",
+      "kind": "url",
+      "status": 200,
+      "bytes": 206444,
+      "contentKind": "html",
+      "score": 4,
+      "disposition": "allow",
+      "findings": [
+        {
+          "ruleId": "hidden_link_cluster",
+          "severity": "low",
+          "confidence": "medium",
+          "count": 1,
+          "sample": "https://jules000120.medium.com/"
+        }
+      ]
+    },
+    {
+      "target": "https://juaancabsou.medium.com/",
+      "kind": "url",
+      "status": 200,
+      "bytes": 156758,
+      "contentKind": "html",
+      "score": 4,
+      "disposition": "allow",
+      "findings": [
+        {
+          "ruleId": "hidden_link_cluster",
+          "severity": "low",
+          "confidence": "medium",
+          "count": 1,
+          "sample": "https://juaancabsou.medium.com/"
+        }
+      ]
+    }
+  ]
+}
