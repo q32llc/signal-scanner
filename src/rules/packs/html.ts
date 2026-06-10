@@ -30,12 +30,13 @@ export const htmlRules: Record<
   mixed_content_script: {
     id: "mixed_content_script",
     pack: "script-risk",
-    severity: "high",
+    severity: "medium",
     confidence: "high",
     title: "Mixed-content script",
     description: "HTTPS page loads a script over HTTP.",
-    locationType: "url",
-    score: { base: 55, tags: ["script", "url"] }
+    // A real injection vector, but a hygiene issue on its own (browsers block it)
+    // — shouldn't convict a site as malicious without corroborating signal.
+    score: { base: 30, tags: ["script", "url"] }
   },
   hidden_iframe_off_origin: {
     id: "hidden_iframe_off_origin",

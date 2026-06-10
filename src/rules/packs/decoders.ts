@@ -24,12 +24,15 @@ export const decodedArtifactRules: Record<"large_base64_blob" | "javascript_hex_
   javascript_unicode_escapes: {
     id: "javascript_unicode_escapes",
     pack: "obfuscation",
-    severity: "medium",
+    severity: "low",
     confidence: "medium",
     title: "Decoded JavaScript unicode escapes",
     description: "Scanner decoded JavaScript unicode escapes and rescanned the artifact.",
     locationType: "decoded_artifact",
-    score: { base: 18, tags: ["decoded", "obfuscation"] }
+    // Unicode escapes are ubiquitous in legitimate minified/i18n JS. The mere
+    // presence is weak — the conviction comes from rescanning the DECODED
+    // artifact (whose own findings fire separately), not from this marker.
+    score: { base: 8, tags: ["decoded", "obfuscation"] }
   },
   fromcharcode_decoded_string: {
     id: "fromcharcode_decoded_string",

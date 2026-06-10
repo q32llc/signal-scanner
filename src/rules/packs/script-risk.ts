@@ -17,13 +17,15 @@ export const scriptRiskRules: PatternRule[] = [
   {
     id: "function_constructor_with_string",
     pack: "script-risk",
-    severity: "high",
-    confidence: "high",
+    severity: "low",
+    confidence: "medium",
     title: "Function constructor with string",
     description: "JavaScript constructs code from a string.",
     locationType: "javascript",
     pattern: /\bnew\s+Function\s*\(/,
-    score: { base: 38, tags: ["script"] }
+    // new Function() is ubiquitous in legitimate minified bundles (framework
+    // template compilers, lodash, etc.) — weak signal alone, like eval().
+    score: { base: 15, tags: ["script"] }
   },
   {
     id: "string_timer_execution",
@@ -221,11 +223,14 @@ export const scriptCompositeRules: Record<
   payment_input_event_hooks: {
     id: "payment_input_event_hooks",
     pack: "payment",
-    severity: "high",
+    severity: "low",
     confidence: "medium",
     title: "Payment input event hooks",
     description: "JavaScript attaches input/change listeners near payment-card fields.",
     locationType: "javascript",
-    score: { base: 72, tags: ["payment", "script"] }
+    // Every legitimate checkout/login listens to its own input fields — weak
+    // signal alone. The real skimmer pattern is this PLUS off-site exfil of the
+    // captured values, which the exfil/credential-form rules score on their own.
+    score: { base: 15, tags: ["payment", "script"] }
   }
 };

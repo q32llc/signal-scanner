@@ -17,7 +17,7 @@
 //   - analyzeDynamicWith(html, opts, evaluate): the generic seam — the caller
 //     passes an `evaluate` that produces a BehaviorReport however it likes.
 
-import { createScanner, isAdOrAnalyticsHost, registrableDomainFor, type Finding, type Severity, type Confidence } from "./index";
+import { assessRedirect, createScanner, isAdOrAnalyticsHost, registrableDomainFor, type Finding, type Severity, type Confidence } from "./index";
 import type { RuleScoreModel } from "./rules/types";
 
 export interface NetworkAttempt {
@@ -153,8 +153,11 @@ export async function analyzeDynamicWith(
 }
 
 const EXFIL_SCORE: RuleScoreModel = { base: 72, tags: ["exfiltration", "script"] };
+const OFFSITE_REQUEST_SCORE: RuleScoreModel = { base: 8, tags: ["network", "script"] };
 const REDIRECT_SCORE: RuleScoreModel = { base: 45, tags: ["redirect", "script"] };
-const EVAL_SCORE: RuleScoreModel = { base: 30, tags: ["obfuscation", "script"] };
+// eval/Function/string-timer use is ubiquitous in legitimate bundles — weak
+// alone. The re-scan of what they produce (below) is where real convictions come from.
+const EVAL_SCORE: RuleScoreModel = { base: 12, tags: ["obfuscation", "script"] };
 
 /** Map recorded behavior to scanner findings, re-scanning injected markup and decoded/eval'd code. */
 export function behaviorFindings(report: BehaviorReport, baseUrl?: string): Finding[] {
@@ -165,11 +168,18 @@ export function behaviorFindings(report: BehaviorReport, baseUrl?: string): Find
   };
 
   for (const target of report.network) {
-    // Only a genuinely third-party destination (different registrable domain) that
-    // is NOT a mainstream ad/analytics/CDN host counts as exfil. Legit sites fetch
-    // their own subdomains, gstatic, analytics, etc. at runtime constantly.
-    if (isThirdPartyTarget(target.url, baseUrl)) {
-      add("high", "high", EXFIL_SCORE, "runtime_offsite_exfil", `Runtime ${target.kind} to an unrelated third-party endpoint`, `Page JavaScript issued a ${target.kind} request to an unrelated domain at runtime — a common credential/data exfiltration pattern.`, target.url, { kind: target.kind });
+    // An off-site runtime request is NOT exfiltration on its own — legit sites
+    // constantly fetch their own subdomains, CDNs, payment processors, analytics
+    // and APIs. Only convict (high) when the destination host ITSELF looks
+    // suspicious (shortener, suspicious TLD, punycode, IP literal, shared/
+    // generated host) — the actual sketchy-endpoint exfil pattern. A request to
+    // an ordinary off-site domain is recorded as a low-signal note, not a flag.
+    if (!isThirdPartyTarget(target.url, baseUrl)) continue;
+    const suspiciousDestination = baseUrl ? assessRedirect(baseUrl, target.url)?.destinationSuspicious ?? false : false;
+    if (suspiciousDestination) {
+      add("high", "high", EXFIL_SCORE, "runtime_offsite_exfil", `Runtime ${target.kind} to a suspicious off-site endpoint`, `Page JavaScript issued a ${target.kind} request to a suspicious unrelated host at runtime — a common credential/data exfiltration pattern.`, target.url, { kind: target.kind });
+    } else {
+      add("info", "low", OFFSITE_REQUEST_SCORE, "runtime_offsite_request", `Runtime ${target.kind} to an unrelated domain`, `Page JavaScript issued a ${target.kind} request to an unrelated (but not obviously suspicious) domain at runtime.`, target.url, { kind: target.kind });
     }
   }
   for (const redirect of report.redirects) {

