@@ -61,6 +61,15 @@ async function main(): Promise<void> {
   // malicious PAGES — where the web heuristics (credential forms, brand
   // impersonation, cloaking) should actually shine.
   const phishingOnly = process.argv.includes("--phishing");
+  // Egress: set EVAL_PROXY_URL (e.g. an unfiltered residential proxy) so the
+  // crawl + reachability probe leave via that proxy instead of the local
+  // network — necessary when an ISP filter (e.g. Spectrum Security Shield)
+  // intercepts known-malicious URLs and serves a block page, which would
+  // otherwise make every bad site look benign. The npm script maps it onto
+  // HTTP(S)_PROXY with NODE_USE_ENV_PROXY=1 (read at startup by node's fetch).
+  const proxy = process.env.EVAL_PROXY_URL || process.env.HTTPS_PROXY || "";
+  console.error(`egress: ${proxy ? "proxy " + redactProxy(proxy) : "direct (local network)"}`);
+
   const good = await loadList("corpus/good.txt");
   const bad = await loadBad(refresh, phishingOnly);
   console.error(`corpus: ${good.length} good, ${bad.length} bad (live, ${phishingOnly ? "phishing-only" : "mixed"})`);
@@ -114,7 +123,9 @@ function report(results: SiteResult[]): void {
 
   const pct = (n: number, d: number) => (d ? `${((100 * n) / d).toFixed(1)}%` : "n/a");
 
+  const proxy = process.env.EVAL_PROXY_URL || process.env.HTTPS_PROXY || "";
   console.log("\n================ SCANNER EVAL ================");
+  console.log(`egress: ${proxy ? "proxy " + redactProxy(proxy) : "direct (local network)"}`);
   console.log(`unreachable (excluded): ${results.filter((r) => r.unreachable).length} / ${results.length}`);
   console.log(`\nGood sites: ${good.length} reachable`);
   console.log(`  flagged (FALSE POSITIVE): ${fp.length}  [${pct(fp.length, good.length)}]`);
@@ -253,6 +264,14 @@ function parseList(text: string): string[] {
 }
 function dedupe(values: string[]): string[] {
   return [...new Set(values)];
+}
+function redactProxy(url: string): string {
+  try {
+    const u = new URL(url);
+    return `${u.hostname}:${u.port}`;
+  } catch {
+    return "set";
+  }
 }
 function shuffle<T>(values: T[]): T[] {
   // Index-based jitter (no Math.random dependency needed for a rough mix).

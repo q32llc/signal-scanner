@@ -10,7 +10,7 @@
   },
   "scripts": {
     "scan": "tsx scripts/scan.ts",
-    "eval": "tsx --env-file-if-exists=.env scripts/eval.ts"
+    "eval": "NODE_USE_ENV_PROXY=1 HTTP_PROXY=\"${EVAL_PROXY_URL-}\" HTTPS_PROXY=\"${EVAL_PROXY_URL-}\" tsx --env-file-if-exists=.env scripts/eval.ts"
   },
   "exports": {
     ".": {
