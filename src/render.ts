@@ -157,6 +157,16 @@ function instrument(window: any, document: any, url: string | undefined, report:
   try { window.XMLHttpRequest = XHRStub; } catch {}
   try { if (window.navigator) window.navigator.sendBeacon = beacon; } catch {}
   try { Object.defineProperty(document, "cookie", { configurable: true, get: () => "", set: (v: unknown) => { report.cookies.push(String(v)); } }); } catch {}
+  // document.write/writeln: linkedom doesn't implement them, yet phishing kits
+  // routinely inject their credential form this way. Materialize the markup into
+  // the real DOM so the rendered output (re-scanned by the static rules) contains
+  // the injected form/script — not just a string buried in a <script>.
+  const writeMarkup = (markup: unknown) => {
+    const target = document.body ?? document.documentElement;
+    try { target?.insertAdjacentHTML("beforeend", String(markup ?? "")); } catch {}
+  };
+  try { document.write = writeMarkup; } catch {}
+  try { document.writeln = (markup: unknown) => writeMarkup(String(markup ?? "") + "\n"); } catch {}
 
   const noop = () => {};
   const timerRun = (fn: unknown) => { try { if (typeof fn === "function") (fn as () => void)(); } catch {} return 0; };
