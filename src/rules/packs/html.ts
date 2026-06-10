@@ -34,6 +34,7 @@ export const htmlRules: Record<
     confidence: "high",
     title: "Mixed-content script",
     description: "HTTPS page loads a script over HTTP.",
+    locationType: "url",
     // A real injection vector, but a hygiene issue on its own (browsers block it)
     // — shouldn't convict a site as malicious without corroborating signal.
     score: { base: 30, tags: ["script", "url"] }

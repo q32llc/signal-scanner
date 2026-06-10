@@ -153,7 +153,7 @@ export async function analyzeDynamicWith(
 }
 
 const EXFIL_SCORE: RuleScoreModel = { base: 72, tags: ["exfiltration", "script"] };
-const OFFSITE_REQUEST_SCORE: RuleScoreModel = { base: 8, tags: ["network", "script"] };
+const OFFSITE_REQUEST_SCORE: RuleScoreModel = { base: 8, tags: ["script"] };
 const REDIRECT_SCORE: RuleScoreModel = { base: 45, tags: ["redirect", "script"] };
 // eval/Function/string-timer use is ubiquitous in legitimate bundles — weak
 // alone. The re-scan of what they produce (below) is where real convictions come from.
