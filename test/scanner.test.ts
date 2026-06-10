@@ -172,9 +172,25 @@ test("detects iframe and redirect rules while extracting structural URLs", () =>
     expect.arrayContaining(["https://evil.test/login", "https://bit.ly/login", "https://example.com/account"])
   );
   expect(report.findings.map((finding) => finding.ruleId)).toEqual(
-    expect.arrayContaining(["hidden_iframe_off_origin", "meta_refresh_external", "redirect_to_url_shortener"])
+    expect.arrayContaining(["hidden_iframe_off_origin", "meta_refresh_external"])
   );
+  // A bit.ly link in CONTENT (meta-refresh target here) must NOT flag the
+  // shortener rule — search/social/news pages are full of them. meta_refresh_external
+  // already covers the off-site redirect.
+  expect(report.findings.map((finding) => finding.ruleId)).not.toContain("redirect_to_url_shortener");
   expect(report.findings.find((finding) => finding.ruleId === "meta_refresh_external")?.metadata.rule_pack).toBe("redirects");
+});
+
+test("flags redirect_to_url_shortener only when the scanned URL is itself a shortener", () => {
+  // Scanned target IS a shortener (cloaking) => flag.
+  const onShortener = createScanner({ source: { url: "https://bit.ly/xY3pQ", contentType: "text/html" } });
+  onShortener.feed(encoder.encode("<html><body>redirecting…</body></html>"));
+  expect(onShortener.finish().findings.map((f) => f.ruleId)).toContain("redirect_to_url_shortener");
+
+  // Ordinary page that merely links to a shortener in content => no flag.
+  const linksToShortener = createScanner({ source: { url: "https://news.example/article", contentType: "text/html" } });
+  linksToShortener.feed(encoder.encode('<a href="https://bit.ly/xY3pQ">source</a>'));
+  expect(linksToShortener.finish().findings.map((f) => f.ruleId)).not.toContain("redirect_to_url_shortener");
 });
 
 test("detects source-code risk signals in streamed file content", () => {

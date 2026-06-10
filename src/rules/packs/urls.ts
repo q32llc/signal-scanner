@@ -31,7 +31,7 @@ export const urlRules: Record<
     severity: "medium",
     confidence: "medium",
     title: "URL shortener destination",
-    description: "Content references a known URL shortener.",
+    description: "The scanned URL is, or redirects through, a known URL shortener (a common cloaking step).",
     locationType: "url",
     score: { base: 20, tags: ["redirect", "url"] }
   },

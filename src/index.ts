@@ -476,7 +476,10 @@ function scanJavaScript(state: ScannerState, text: string): void {
   if (hasWalletSignal(text) && hasExternalRequestApi && hasNearbyOffSiteUrlWith(text, pageUrl(state), /\b(?:window\.ethereum|WalletConnect|ethereum\.request|sendBeacon|fetch|XMLHttpRequest|WebSocket)\b|\.(?:approve|permit)\s*\(|\bmethod\s*:\s*['"]eth_/i)) {
     addRuleFinding(state, scriptCompositeRules.wallet_api_plus_external_beacon, pageUrl(state) ?? "script", {});
   }
-  if (/(?:cc-number|cardnumber|card|cvv|cvc|expiry|payment)/i.test(text) && /addEventListener\s*\(\s*['"](?:input|change|keyup|keydown)['"]/.test(text)) {
+  // Payment-card field IDENTIFIERS only — bare "card"/"payment" match UI card
+  // components and nav links on ordinary sites (with input listeners everywhere),
+  // which is a major false-positive source.
+  if (/(?:cc-number|cc-exp|cc-csc|cardnumber|card-number|card_number|card-expiry|cardexpiry|cvv|cvc|security-?code)/i.test(text) && /addEventListener\s*\(\s*['"](?:input|change|keyup|keydown)['"]/.test(text)) {
     addRuleFinding(state, scriptCompositeRules.payment_input_event_hooks, pageUrl(state) ?? "script", {});
   }
 }
@@ -823,7 +826,10 @@ function addUrl(state: ScannerState, raw: string): void {
   if (normalized.flags.includes("punycode") && /login|signin|account|verify/i.test(normalized.normalized)) {
     addRuleFinding(state, urlRules.punycode_login_url, normalized.normalized, {});
   }
-  if (normalized.destinationType === "url-shortener") {
+  // Only when the scanned page itself IS, or redirects through, a shortener
+  // (cloaking) — not when its content merely links to one. Search engines,
+  // social, news and forums are full of bit.ly links in content.
+  if (normalized.destinationType === "url-shortener" && isSourceOrFinalUrl(state, normalized.normalized)) {
     addRuleFinding(state, urlRules.redirect_to_url_shortener, normalized.normalized, {});
   }
   if (normalized.flags.includes("private_or_localhost") && isSourceOrFinalUrl(state, normalized.normalized)) {
