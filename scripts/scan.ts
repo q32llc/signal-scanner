@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 import { createScanner, dispositionForScore, normalizeUrl, scoreFindings, type Finding, type ScannerReport } from "../src/index";
 import { RECORDER_SOURCE, behaviorFindings, extractInlineScripts, type BehaviorReport } from "../src/dynamic";
@@ -14,7 +15,16 @@ const DYNAMIC_TIMEOUT_MS = 3000;
 // chosen executor. (isolated-vm can be swapped in here for a stronger boundary.)
 function recordBehaviorInVm(scripts: string[], url?: string): BehaviorReport {
   const context = vm.createContext({ URL, atob, btoa, __scripts: scripts, __url: url });
-  return vm.runInNewContext(`${RECORDER_SOURCE}\nrecordBehavior(__scripts, __url)`, context, { timeout: DYNAMIC_TIMEOUT_MS }) as BehaviorReport;
+  return vm.runInNewContext(`${RECORDER_SOURCE}\nrecordBehavior(__scripts, __url)`, context, {
+    timeout: DYNAMIC_TIMEOUT_MS,
+    // Untrusted page JS may use dynamic import(). Without a handler node:vm
+    // throws ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING — and because import() is
+    // async the throw escapes the caller's try/catch. Block it with a rejecting
+    // stub instead: the scanner records behavior, it never loads page modules.
+    importModuleDynamically: () => {
+      throw new Error("dynamic import blocked in scanner sandbox");
+    }
+  }) as BehaviorReport;
 }
 
 // Run a fetched HTML page's inline scripts in the sandbox and fold the dynamic
@@ -52,7 +62,21 @@ const DEFAULT_PARALLEL = 10;
 // scanners) reveal their actual content.
 const USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
-interface TargetReport {
+// Reusable defaults so other scripts (e.g. the eval harness) can build
+// CrawlOptions without re-deriving them.
+export const DEFAULT_CRAWL_OPTIONS: CrawlOptions = {
+  parallel: DEFAULT_PARALLEL,
+  maxUrls: MAX_CRAWL_URLS,
+  maxDepth: MAX_CRAWL_DEPTH,
+  maxBytes: MAX_FETCH_BYTES,
+  maxTotalBytes: MAX_TOTAL_BYTES,
+  maxSitemapUrls: MAX_SITEMAP_URLS,
+  timeoutMs: REQUEST_TIMEOUT_MS,
+  robots: true,
+  userAgent: USER_AGENT
+};
+
+export interface TargetReport {
   target: string;
   kind: "url" | "file";
   status?: number;
@@ -61,7 +85,7 @@ interface TargetReport {
   error?: string;
 }
 
-interface CrawlOptions {
+export interface CrawlOptions {
   parallel: number;
   maxUrls: number;
   maxDepth: number;
@@ -127,7 +151,7 @@ async function main(): Promise<void> {
   printSummary(reports);
 }
 
-async function crawlTargets(startUrls: string[], options: CrawlOptions): Promise<TargetReport[]> {
+export async function crawlTargets(startUrls: string[], options: CrawlOptions): Promise<TargetReport[]> {
   const reports: TargetReport[] = [];
   const queue: QueueItem[] = [];
   const queued = new Set<string>();
@@ -532,7 +556,10 @@ function nonNegativeInt(value: string, name: string): number {
   return parsed;
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+// Only run the CLI when invoked directly, not when imported (e.g. by eval.ts).
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+  main().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+}

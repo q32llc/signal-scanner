@@ -1,0 +1,107 @@
+# Known-good sites for the scanner eval (one URL per line, # = comment).
+# Chosen to stress the false-positive-prone categories: credential/login pages,
+# payment forms, heavy-JS SPAs, CDN/bucket-heavy apps, crypto/finance trigger
+# words, brand-bearing ccTLDs, and less-polished small-biz/CMS sites.
+
+# --- Big tech / high-traffic ---
+https://www.google.com/
+https://www.youtube.com/
+https://www.facebook.com/
+https://www.amazon.com/
+https://www.apple.com/
+https://www.microsoft.com/
+https://en.wikipedia.org/
+https://www.linkedin.com/
+https://www.netflix.com/
+https://www.reddit.com/
+https://github.com/
+https://stackoverflow.com/
+https://www.cloudflare.com/
+https://www.adobe.com/
+
+# --- Banks / finance (login + credential pages) ---
+https://www.chase.com/
+https://www.bankofamerica.com/
+https://www.wellsfargo.com/
+https://www.paypal.com/
+https://www.capitalone.com/
+https://www.americanexpress.com/
+https://www.fidelity.com/
+https://www.schwab.com/
+https://www.citi.com/
+
+# --- Crypto / finance (trigger-word stress test) ---
+https://www.coinbase.com/
+https://www.kraken.com/
+https://www.binance.com/
+https://www.blockchain.com/
+https://stripe.com/
+
+# --- Government ---
+https://www.irs.gov/
+https://www.usa.gov/
+https://www.nasa.gov/
+https://www.cdc.gov/
+https://www.gov.uk/
+https://www.canada.ca/
+https://european-union.europa.eu/
+
+# --- Ecommerce / payment forms ---
+https://www.ebay.com/
+https://www.etsy.com/
+https://www.walmart.com/
+https://www.target.com/
+https://www.bestbuy.com/
+https://www.shopify.com/
+https://www.wayfair.com/
+https://www.booking.com/
+
+# --- SaaS dashboards (login + heavy JS SPAs) ---
+https://www.salesforce.com/
+https://slack.com/
+https://www.notion.so/
+https://www.figma.com/
+https://www.dropbox.com/
+https://zoom.us/
+https://www.atlassian.com/
+https://www.hubspot.com/
+
+# --- News / media ---
+https://www.nytimes.com/
+https://www.bbc.com/
+https://www.cnn.com/
+https://www.theguardian.com/
+https://www.reuters.com/
+
+# --- Dev / CDN / bucket-heavy ---
+https://vercel.com/
+https://www.netlify.com/
+https://www.npmjs.com/
+https://gitlab.com/
+https://bitbucket.org/
+https://www.jsdelivr.com/
+
+# --- Brand-bearing ccTLDs (brand-impersonation false-positive test) ---
+https://www.google.co.uk/
+https://www.google.de/
+https://www.amazon.co.jp/
+https://www.bbc.co.uk/
+https://www.rakuten.co.jp/
+https://www.baidu.com/
+https://yandex.com/
+
+# --- Universities ---
+https://www.mit.edu/
+https://www.harvard.edu/
+https://www.stanford.edu/
+https://www.ox.ac.uk/
+
+# --- Small-biz / CMS / publishing (less-polished, FP-prone) ---
+https://wordpress.com/
+https://medium.com/
+https://substack.com/
+https://mailchimp.com/
+https://www.squarespace.com/
+https://www.wix.com/
+https://www.godaddy.com/
+https://www.canva.com/
