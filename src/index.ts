@@ -1,3 +1,4 @@
+import { Parser } from "htmlparser2";
 import { binaryRules, binaryStringRules, cssRules, decodedArtifactRules, htmlRules, htmlTechnologyRules, scriptCompositeRules, scriptRiskRules, sourceCodeRules, urlRules } from "./rules/packs";
 import type { RuleDefinition, RuleScoreModel, ScoreTag } from "./rules/types";
 
@@ -297,92 +298,133 @@ function scanText(
 }
 
 function scanHtml(state: ScannerState, text: string): void {
-  for (const tag of text.matchAll(/<\s*([a-z0-9:-]+)\b([^>]*)>/gi)) {
-    const name = tag[1].toLowerCase();
-    const attrs = parseAttrs(tag[2]);
-    if (name === "script") {
-      const src = attrs.get("src");
-      if (src) {
-        increment(state, "html.script_src");
-        addUrl(state, src);
-        const normalized = normalizeUrl(src, pageUrl(state));
-        // Ad/analytics/tag-manager scripts are expected on ordinary ad-funded
-        // sites (news, blogs) and are never a phishing exfil channel, so they
-        // don't count toward "suspicious external scripts".
-        if (normalized?.relation === "off-site" && !isAdOrAnalyticsHost(normalized.normalized)) state.externalScripts.push(normalized);
-        if (pageUrl(state)?.startsWith("https://") && normalized?.scheme === "http") addRuleFinding(state, htmlRules.mixed_content_script, normalized.normalized, {});
-        scanTechnologyFingerprint(state, src, normalized?.normalized ?? src);
-      } else {
-        increment(state, "inline_script");
+  // Tokenize with htmlparser2 rather than hand-rolled regexes: it correctly
+  // handles malformed markup, entity-encoded attribute values (e.g.
+  // href="java&#115;cript:…"), quoting tricks, and tags split oddly — all of
+  // which trivially evade `<tag ...>` regexes. The scanner already streams in
+  // overlapping windows, so we parse this window in one pass; the inflated
+  // counts from the carry overlap and finding dedup behave exactly as before.
+  let scriptBody = "";
+  let scriptDepth = 0;
+  const parser = new Parser(
+    {
+      onopentag(name, attribs) {
+        const attrs = new Map<string, string>();
+        for (const key of Object.keys(attribs)) attrs.set(key.toLowerCase(), attribs[key]);
+        if (name === "script") {
+          scriptDepth += 1;
+          scriptBody = "";
+        }
+        handleOpenTag(state, name, attrs);
+      },
+      ontext(chunk) {
+        if (scriptDepth > 0) scriptBody += chunk;
+      },
+      onclosetag(name) {
+        if (name === "script" && scriptDepth > 0) {
+          scriptDepth -= 1;
+          state.inScript = false;
+          if (scriptBody) scanJavaScript(state, scriptBody);
+          scriptBody = "";
+        }
       }
-      state.inScript = true;
-    }
-    if (name === "form") {
-      increment(state, "html.form");
-      state.forms.push({
-        action: attrs.get("action") ?? null,
-        method: attrs.get("method")?.toLowerCase() ?? "get",
-        hasPassword: false,
-        hasPayment: false,
-        hiddenTarget: /display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0/i.test(attrs.get("style") ?? "")
-      });
-    }
-    if (name === "input") {
-      const type = (attrs.get("type") ?? "").toLowerCase();
-      const field = `${attrs.get("name") ?? ""} ${attrs.get("autocomplete") ?? ""}`.toLowerCase();
-      const isPassword = type === "password" || field.includes("password");
-      // A password field anywhere on the page is credential capture, even when
-      // it isn't wrapped in a <form> — PIN/OTP grids and JS-submit kits routinely
-      // place inputs outside any form and exfiltrate via fetch.
-      if (isPassword) increment(state, "page_password_input");
-      if (state.forms.length) {
-        increment(state, "html.input");
-        const form = state.forms[state.forms.length - 1];
-        if (isPassword) form.hasPassword = true;
-        if (/(?:cc-|card|cvv|cvc|expiry|payment)/.test(`${type} ${field}`)) form.hasPayment = true;
-      }
-    }
-    if (["a", "link", "img", "iframe"].includes(name)) {
-      increment(state, `html.${name}`);
-      const src = attrs.get("href") ?? attrs.get("src");
-      if (src) addUrl(state, src);
-      if (name === "iframe" && src && hiddenAttrs(attrs)) {
-        const normalized = normalizeUrl(src, pageUrl(state));
-        if (normalized?.relation === "off-site" && hasRiskyUrlFlags(normalized)) addRuleFinding(state, htmlRules.hidden_iframe_off_origin, normalized.normalized, {});
-      }
-    }
-    if (name === "base") {
-      const href = attrs.get("href");
-      if (href) {
-        increment(state, "html.base_href");
-        addUrl(state, href);
-      }
-    }
-    if (name === "link" && /canonical/i.test(attrs.get("rel") ?? "")) {
-      increment(state, "html.canonical");
-    }
-    if (name === "meta" && /generator/i.test(attrs.get("name") ?? "") && /wordpress/i.test(attrs.get("content") ?? "")) {
-      addRuleFinding(state, htmlTechnologyRules.wordpress_surface_reference, pageUrl(state) ?? "html", { generator: attrs.get("content") ?? "" });
-    }
-    if (name === "meta" && /refresh/i.test(attrs.get("http-equiv") ?? "")) {
-      increment(state, "html.meta_refresh");
-      const content = attrs.get("content") ?? "";
-      const target = content.match(/url\s*=\s*([^;]+)/i)?.[1]?.trim();
-      if (target) {
-        const normalized = normalizeUrl(target, pageUrl(state));
-        if (normalized?.relation === "off-site") addRuleFinding(state, htmlRules.meta_refresh_external, normalized.normalized, {});
-      }
-    }
+    },
+    { decodeEntities: true, lowerCaseTags: true, lowerCaseAttributeNames: true }
+  );
+  parser.write(text);
+  parser.end();
+  // A <script> whose closing tag falls beyond this window: still scan what we
+  // captured (regexes would have missed the whole block), and remember we're
+  // mid-script so the next chunk keeps scanning JS.
+  if (scriptDepth > 0 && scriptBody) {
+    scanJavaScript(state, scriptBody);
+    state.inScript = true;
   }
 
-  for (const script of text.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)) scanJavaScript(state, script[1]);
-  if (/wp-content|wp-includes|<meta[^>]+generator[^>]+wordpress/i.test(text)) {
+  if (/wp-content|wp-includes/i.test(text)) {
     addRuleFinding(state, htmlTechnologyRules.wordpress_surface_reference, pageUrl(state) ?? "html", {});
   }
   scanTechnologyFingerprint(state, text, pageUrl(state) ?? "html");
-  if (/<\/script\s*>/i.test(text)) state.inScript = false;
   if (/(?:login|sign in|password|account|verify|checkout|payment)/i.test(text)) increment(state, "brand_login_or_payment_language");
   recordContentBrandMentions(state, text);
+}
+
+// Per-tag dispatch, shared by the htmlparser2 open-tag callback. `name` is
+// already lowercased; `attrs` keys are lowercased with entity-decoded values.
+function handleOpenTag(state: ScannerState, name: string, attrs: Map<string, string>): void {
+  if (name === "script") {
+    const src = attrs.get("src");
+    if (src) {
+      increment(state, "html.script_src");
+      addUrl(state, src);
+      const normalized = normalizeUrl(src, pageUrl(state));
+      // Ad/analytics/tag-manager scripts are expected on ordinary ad-funded
+      // sites (news, blogs) and are never a phishing exfil channel, so they
+      // don't count toward "suspicious external scripts".
+      if (normalized?.relation === "off-site" && !isAdOrAnalyticsHost(normalized.normalized)) state.externalScripts.push(normalized);
+      if (pageUrl(state)?.startsWith("https://") && normalized?.scheme === "http") addRuleFinding(state, htmlRules.mixed_content_script, normalized.normalized, {});
+      scanTechnologyFingerprint(state, src, normalized?.normalized ?? src);
+    } else {
+      increment(state, "inline_script");
+    }
+    state.inScript = true;
+  }
+  if (name === "form") {
+    increment(state, "html.form");
+    state.forms.push({
+      action: attrs.get("action") ?? null,
+      method: attrs.get("method")?.toLowerCase() ?? "get",
+      hasPassword: false,
+      hasPayment: false,
+      hiddenTarget: /display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0/i.test(attrs.get("style") ?? "")
+    });
+  }
+  if (name === "input") {
+    const type = (attrs.get("type") ?? "").toLowerCase();
+    const field = `${attrs.get("name") ?? ""} ${attrs.get("autocomplete") ?? ""}`.toLowerCase();
+    const isPassword = type === "password" || field.includes("password");
+    // A password field anywhere on the page is credential capture, even when
+    // it isn't wrapped in a <form> — PIN/OTP grids and JS-submit kits routinely
+    // place inputs outside any form and exfiltrate via fetch.
+    if (isPassword) increment(state, "page_password_input");
+    if (state.forms.length) {
+      increment(state, "html.input");
+      const form = state.forms[state.forms.length - 1];
+      if (isPassword) form.hasPassword = true;
+      if (/(?:cc-|card|cvv|cvc|expiry|payment)/.test(`${type} ${field}`)) form.hasPayment = true;
+    }
+  }
+  if (["a", "link", "img", "iframe"].includes(name)) {
+    increment(state, `html.${name}`);
+    const src = attrs.get("href") ?? attrs.get("src");
+    if (src) addUrl(state, src);
+    if (name === "iframe" && src && hiddenAttrs(attrs)) {
+      const normalized = normalizeUrl(src, pageUrl(state));
+      if (normalized?.relation === "off-site" && hasRiskyUrlFlags(normalized)) addRuleFinding(state, htmlRules.hidden_iframe_off_origin, normalized.normalized, {});
+    }
+  }
+  if (name === "base") {
+    const href = attrs.get("href");
+    if (href) {
+      increment(state, "html.base_href");
+      addUrl(state, href);
+    }
+  }
+  if (name === "link" && /canonical/i.test(attrs.get("rel") ?? "")) {
+    increment(state, "html.canonical");
+  }
+  if (name === "meta" && /generator/i.test(attrs.get("name") ?? "") && /wordpress/i.test(attrs.get("content") ?? "")) {
+    addRuleFinding(state, htmlTechnologyRules.wordpress_surface_reference, pageUrl(state) ?? "html", { generator: attrs.get("content") ?? "" });
+  }
+  if (name === "meta" && /refresh/i.test(attrs.get("http-equiv") ?? "")) {
+    increment(state, "html.meta_refresh");
+    const content = attrs.get("content") ?? "";
+    const target = content.match(/url\s*=\s*([^;]+)/i)?.[1]?.trim();
+    if (target) {
+      const normalized = normalizeUrl(target, pageUrl(state));
+      if (normalized?.relation === "off-site") addRuleFinding(state, htmlRules.meta_refresh_external, normalized.normalized, {});
+    }
+  }
 }
 
 // Count how often each known brand is named in the page content. Combined with a
@@ -852,14 +894,6 @@ function addFinding(
     locationValue,
     metadata: { line: state.line, column: state.column, ...metadata }
   });
-}
-
-function parseAttrs(input: string): Map<string, string> {
-  const attrs = new Map<string, string>();
-  for (const match of input.matchAll(/([a-z0-9:_-]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/gi)) {
-    attrs.set(match[1].toLowerCase(), match[2] ?? match[3] ?? match[4] ?? "");
-  }
-  return attrs;
 }
 
 function hiddenAttrs(attrs: Map<string, string>): boolean {

