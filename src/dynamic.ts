@@ -58,17 +58,30 @@ function recordBehavior(scripts, url) {
   var recordEval = function (c) { report.evals.push(String(c)); return undefined; };
   var FunctionStub = function () { var a = arguments; report.evals.push(String(a[a.length - 1] == null ? "" : a[a.length - 1])); return function () {}; };
   var locationProxy = new Proxy({ href: url || "", assign: function (u) { report.redirects.push(resolve(u)); }, replace: function (u) { report.redirects.push(resolve(u)); }, reload: function () {}, toString: function () { return url || ""; } }, { set: function (t, p, val) { if (p === "href") report.redirects.push(resolve(val)); t[p] = val; return true; } });
+  var noop = function () {};
   var makeElement = function (tag) {
-    var el = { tagName: String(tag).toUpperCase(), style: {}, children: [], attributes: {} };
+    var el = { tagName: String(tag).toUpperCase(), style: {}, children: [], attributes: {}, dataset: {}, classList: { add: noop, remove: noop, toggle: noop, contains: function () { return false; } } };
     var s = "", a = "";
     Object.defineProperty(el, "src", { get: function () { return s; }, set: function (v) { s = String(v); report.network.push({ kind: el.tagName === "IMG" ? "image" : "script", url: resolve(v) }); } });
     Object.defineProperty(el, "action", { get: function () { return a; }, set: function (v) { a = String(v); report.network.push({ kind: "form", url: resolve(v) }); } });
     Object.defineProperty(el, "innerHTML", { get: function () { return ""; }, set: function (v) { report.writes.push(String(v)); } });
+    Object.defineProperty(el, "outerHTML", { get: function () { return ""; }, set: function (v) { report.writes.push(String(v)); } });
+    el.insertAdjacentHTML = function (pos, html) { report.writes.push(String(html)); };
     el.setAttribute = function (k, v) { if (k === "src") el.src = v; else if (k === "action") el.action = v; else el.attributes[k] = v; };
-    el.appendChild = function (c) { return c; }; el.addEventListener = function () {};
+    el.getAttribute = function (k) { return el.attributes[k] != null ? el.attributes[k] : null; };
+    el.appendChild = function (c) { return c; }; el.removeChild = function (c) { return c; }; el.remove = noop; el.addEventListener = noop; el.removeEventListener = noop;
+    // DOM queries on an element return instrumented elements too, so a chained
+    // injection (container.querySelector('.x').innerHTML = ...) still records.
+    el.querySelector = function () { return makeElement("div"); };
+    el.querySelectorAll = function () { return [makeElement("div")]; };
+    el.getElementsByTagName = function (t) { return [makeElement(t)]; };
+    el.getElementsByClassName = function () { return [makeElement("div")]; };
     return el;
   };
-  var documentShim = { write: function () { report.writes.push(Array.prototype.map.call(arguments, String).join("")); }, writeln: function () { report.writes.push(Array.prototype.map.call(arguments, String).join("")); }, createElement: function (t) { return makeElement(String(t)); }, getElementById: function () { return null; }, getElementsByTagName: function () { return []; }, querySelector: function () { return null; }, querySelectorAll: function () { return []; }, addEventListener: function () {}, body: makeElement("body"), head: makeElement("head"), location: locationProxy };
+  // getElementById/querySelector return INSTRUMENTED elements (not null), so the
+  // most common injection pattern — getElementById('x').innerHTML = '<form>...' —
+  // is recorded instead of throwing on null and aborting the whole script.
+  var documentShim = { write: function () { report.writes.push(Array.prototype.map.call(arguments, String).join("")); }, writeln: function () { report.writes.push(Array.prototype.map.call(arguments, String).join("")); }, createElement: function (t) { return makeElement(String(t)); }, getElementById: function () { return makeElement("div"); }, getElementsByTagName: function (t) { return [makeElement(String(t))]; }, getElementsByClassName: function () { return [makeElement("div")]; }, querySelector: function () { return makeElement("div"); }, querySelectorAll: function () { return [makeElement("div")]; }, addEventListener: noop, body: makeElement("body"), head: makeElement("head"), documentElement: makeElement("html"), location: locationProxy };
   Object.defineProperty(documentShim, "cookie", { get: function () { return ""; }, set: function (v) { report.cookies.push(String(v)); } });
   var safeAtob = function (v) { var out; try { out = atob(String(v)); } catch (e) { out = String(v); } report.decoded.push(out); return out; };
   var safeBtoa = function (v) { try { return btoa(String(v)); } catch (e) { return String(v); } };
@@ -203,6 +216,24 @@ export function behaviorFindings(report: BehaviorReport, baseUrl?: string): Find
     }
   }
   return findings;
+}
+
+// URLs a page's JavaScript surfaced at runtime — redirect/navigation targets,
+// fetch/XHR/script/form endpoints, and any links embedded in markup the JS
+// injected (document.write / innerHTML). The crawler merges the same-origin
+// ones into its frontier so it CONTINUES into JS-revealed pages instead of
+// treating dynamic analysis as a dead end.
+export function discoveredUrlsFromBehavior(report: BehaviorReport, baseUrl?: string): string[] {
+  const urls = new Set<string>();
+  for (const redirect of report.redirects) if (redirect) urls.add(redirect);
+  for (const target of report.network) if (target.url) urls.add(target.url);
+  for (const chunk of report.writes) {
+    if (!chunk || chunk.length < 4) continue;
+    const scanner = createScanner({ source: { url: baseUrl, contentType: "text/html" } });
+    scanner.feed(new TextEncoder().encode(chunk));
+    for (const url of scanner.finish().urls) urls.add(url.normalized);
+  }
+  return [...urls];
 }
 
 // A runtime target counts only if it's a different registrable domain than the

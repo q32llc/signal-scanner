@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 import { createScanner, dispositionForScore, normalizeUrl, scoreFindings, type Finding, type ScannerReport } from "../src/index";
-import { RECORDER_SOURCE, behaviorFindings, extractInlineScripts, type BehaviorReport } from "../src/dynamic";
+import { RECORDER_SOURCE, behaviorFindings, discoveredUrlsFromBehavior, extractInlineScripts, type BehaviorReport } from "../src/dynamic";
 
 const DYNAMIC_TIMEOUT_MS = 3000;
 
@@ -38,12 +38,23 @@ function applyDynamicAnalysis(report: ScannerReport, chunks: Uint8Array[], url: 
   for (const chunk of chunks) { merged.set(chunk, offset); offset += chunk.byteLength; }
   const scripts = extractInlineScripts(new TextDecoder("utf-8", { fatal: false }).decode(merged));
   if (!scripts.length) return;
-  let dynamic: Finding[];
+  let behavior;
   try {
-    dynamic = behaviorFindings(recordBehaviorInVm(scripts, url), url);
+    behavior = recordBehaviorInVm(scripts, url);
   } catch {
     return; // sandbox/timeout failure never breaks the scan
   }
+  // Feed URLs the JS surfaced (redirects, fetch/form endpoints, links in
+  // injected markup) into report.urls so the crawler continues into them.
+  const known = new Set(report.urls.map((u) => u.normalized));
+  for (const raw of discoveredUrlsFromBehavior(behavior, url)) {
+    const normalized = normalizeUrl(raw, url);
+    if (normalized && !known.has(normalized.normalized)) {
+      report.urls.push(normalized);
+      known.add(normalized.normalized);
+    }
+  }
+  const dynamic = behaviorFindings(behavior, url);
   if (!dynamic.length) return;
   report.findings = [...report.findings, ...dynamic];
   report.score = scoreFindings(report.findings);

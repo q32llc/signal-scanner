@@ -61,6 +61,9 @@ async function main(): Promise<void> {
   // malicious PAGES — where the web heuristics (credential forms, brand
   // impersonation, cloaking) should actually shine.
   const phishingOnly = process.argv.includes("--phishing");
+  // --live uses the curated, hand-verified corpus/phishing-live.txt (real
+  // credential-capture pages confirmed alive) instead of a noisy feed.
+  const live = process.argv.includes("--live");
   // Egress: set EVAL_PROXY_URL (e.g. an unfiltered residential proxy) so the
   // crawl + reachability probe leave via that proxy instead of the local
   // network — necessary when an ISP filter (e.g. Spectrum Security Shield)
@@ -71,8 +74,8 @@ async function main(): Promise<void> {
   console.error(`egress: ${proxy ? "proxy " + redactProxy(proxy) : "direct (local network)"}`);
 
   const good = await loadList("corpus/good.txt");
-  const bad = await loadBad(refresh, phishingOnly);
-  console.error(`corpus: ${good.length} good, ${bad.length} bad (live, ${phishingOnly ? "phishing-only" : "mixed"})`);
+  const bad = live ? await loadList("corpus/phishing-live.txt") : await loadBad(refresh, phishingOnly);
+  console.error(`corpus: ${good.length} good, ${bad.length} bad (${live ? "curated live" : phishingOnly ? "phishing feed" : "mixed feed"})`);
 
   const labeled: Array<{ url: string; label: "good" | "bad" }> = [
     ...good.map((url) => ({ url, label: "good" as const })),
