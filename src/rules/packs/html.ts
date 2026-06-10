@@ -14,7 +14,8 @@ export const htmlRules: Record<
   | "crypto_wallet_login_language"
   | "crypto_trading_landing_language"
   | "seo_trademark_stuffing"
-  | "credential_form_on_suspicious_host",
+  | "credential_form_on_suspicious_host"
+  | "brand_impersonation_content",
   RuleDefinition
 > = {
   external_script_from_unrelated_domain: {
@@ -158,6 +159,16 @@ export const htmlRules: Record<
     description: "Page contains credential fields on a generated, shared-hosting, suspicious-path, or redirected host.",
     locationType: "html",
     score: { base: 72, tags: ["credential", "hosting", "phishing"] }
+  },
+  brand_impersonation_content: {
+    id: "brand_impersonation_content",
+    pack: "phishing",
+    severity: "high",
+    confidence: "high",
+    title: "Page mimics a brand and captures credentials",
+    description: "Page content prominently references a well-known brand and presents a credential field, but is served from a domain that does not belong to that brand — the core credential-phishing pattern, independent of the URL.",
+    locationType: "html",
+    score: { base: 68, tags: ["credential", "phishing"] }
   }
 };
 

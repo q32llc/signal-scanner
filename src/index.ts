@@ -375,6 +375,28 @@ function scanHtml(state: ScannerState, text: string): void {
   scanTechnologyFingerprint(state, text, pageUrl(state) ?? "html");
   if (/<\/script\s*>/i.test(text)) state.inScript = false;
   if (/(?:login|sign in|password|account|verify|checkout|payment)/i.test(text)) increment(state, "brand_login_or_payment_language");
+  recordContentBrandMentions(state, text);
+}
+
+// Count how often each known brand is named in the page content. Combined with a
+// credential field on a non-brand domain (see finalizeAggregateRules) this is the
+// core phishing tell — a page that looks like Brand X but isn't Brand X's site.
+function recordContentBrandMentions(state: ScannerState, text: string): void {
+  // The page's claimed identity: brand named in the <title>. Legit sites title
+  // themselves with their OWN brand (or none we track), never a brand they
+  // aren't — so this is the high-precision impersonation signal.
+  const title = text.match(/<title\b[^>]*>([\s\S]{0,200}?)<\/title>/i)?.[1] ?? "";
+  for (const brand of PHISH_BRANDS) {
+    let hits = 0;
+    for (const kw of brand.keywords) {
+      if (kw.length < 4) continue;
+      const re = new RegExp("\\b" + kw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b", "gi");
+      const matches = text.match(re);
+      if (matches) hits += matches.length;
+      if (title && re.test(title)) state.counters["title_brand:" + brand.brand] = 1;
+    }
+    if (hits) state.counters["content_brand:" + brand.brand] = (state.counters["content_brand:" + brand.brand] ?? 0) + hits;
+  }
 }
 
 function scanPageIntentSignals(state: ScannerState, text: string): void {
@@ -531,6 +553,30 @@ function finalizeAggregateRules(state: ScannerState): void {
     }
     if (form.hasPassword && hasSuspiciousTargetContext(state)) {
       addRuleFinding(state, htmlRules.credential_form_on_suspicious_host, pageUrl(state) ?? "form", {});
+    }
+  }
+  // Brand impersonation in CONTENT: the page prominently names a brand and
+  // captures credentials, but is not served from that brand's own domain. This
+  // is the durable phishing signal — it doesn't depend on the URL or where the
+  // form posts (kits collect to same-host PHP just as often as off-origin).
+  if (state.forms.some((form) => form.hasPassword)) {
+    const host = pageHost(state);
+    const pageFlags = host ? normalizeUrl(pageUrl(state)!)?.flags ?? [] : [];
+    const throwawayHost = pageFlags.some((flag) => ["shared_hosting_subdomain", "generated_host_label", "suspicious_tld", "punycode", "ip_literal"].includes(flag));
+    if (host) {
+      for (const brand of PHISH_BRANDS) {
+        if (brand.allowed.test(host)) continue; // the brand's own domain — not impersonation
+        const inTitle = (state.counters["title_brand:" + brand.brand] ?? 0) > 0;
+        const mentions = state.counters["content_brand:" + brand.brand] ?? 0;
+        // Convict when the page CLAIMS to be the brand (brand in <title>), or the
+        // brand dominates the content on a throwaway host (where no legitimate
+        // brand login lives). Reputable hosts that merely reference other brands
+        // (app-store/social links) don't qualify.
+        if (inTitle || (mentions >= 3 && throwawayHost)) {
+          addRuleFinding(state, htmlRules.brand_impersonation_content, pageUrl(state) ?? "site", { brand: brand.brand, mentions, in_title: inTitle });
+          break;
+        }
+      }
     }
   }
   const externalScripts = [...state.findings].filter((finding) => finding.ruleId === "external_script_from_unrelated_domain").length;
@@ -896,6 +942,8 @@ function isSharedHostingSubdomain(host: string, registrableDomain: string | null
     "github.io",
     "pages.dev",
     "workers.dev",
+    "edgeone.app",
+    "edgeone.dev",
     "firebaseapp.com",
     "web.app",
     "herokuapp.com",
@@ -1204,6 +1252,16 @@ function scanTechnologyFingerprint(state: ScannerState, text: string, locationVa
 
 function pageUrl(state: ScannerState): string | undefined {
   return state.source.finalUrl ?? state.source.url ?? state.source.originUrl;
+}
+
+function pageHost(state: ScannerState): string | null {
+  const url = pageUrl(state);
+  if (!url) return null;
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
 }
 
 function decodeText(bytes: Uint8Array): string {

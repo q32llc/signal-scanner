@@ -35,6 +35,22 @@ test("normalizes URLs and classifies off-site, punycode, and shortener destinati
   expect(malwarePath?.flags).toEqual(expect.arrayContaining(["ip_literal", "malware_download_like_path"]));
 });
 
+test("flags brand impersonation in content but not the brand's own login", () => {
+  const scan = (html: string, url: string) => {
+    const scanner = createScanner({ source: { url, contentType: "text/html" } });
+    scanner.feed(new TextEncoder().encode(html));
+    return scanner.finish().findings.map((f) => f.ruleId);
+  };
+  const msLogin = `<html><head><title>Sign in to your Microsoft account</title></head><body><form action="save.php"><input type="password" name="passwd"></form></body></html>`;
+  // Brand in <title> + credential field on a non-Microsoft domain => impersonation.
+  expect(scan(msLogin, "https://login-update.evil.example/")).toContain("brand_impersonation_content");
+  // Same page on Microsoft's own domain => not impersonation.
+  expect(scan(msLogin, "https://login.microsoftonline.com/")).not.toContain("brand_impersonation_content");
+  // A site that merely names a brand it isn't, with a login, on a reputable host
+  // (no throwaway flag, brand not in title) => not flagged.
+  expect(scan(`<title>Acme</title><body>we integrate with paypal, paypal, paypal<form><input type=password></form>`, "https://www.acme-corp.com/login")).not.toContain("brand_impersonation_content");
+});
+
 test("assessRedirect convicts only off-site hops to suspicious destinations", () => {
   // Same registrable domain (subdomain hop) — not off-site.
   expect(assessRedirect("https://google.com/", "https://www.google.com/")?.offSite).toBe(false);

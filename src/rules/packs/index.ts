@@ -27,6 +27,7 @@ export const rulePacks = {
     htmlRules.crypto_trading_landing_language,
     htmlRules.seo_trademark_stuffing,
     htmlRules.credential_form_on_suspicious_host,
+    htmlRules.brand_impersonation_content,
     urlRules.punycode_login_url,
     urlRules.brand_impersonation_url
   ],
