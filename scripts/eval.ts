@@ -19,6 +19,7 @@ const FLAG_THRESHOLD = 50; // score >= 50 => product surfaces suspicious/malicio
 const TARGET_BAD = 80;
 const SITE_CONCURRENCY = 6;
 const CACHE_PATH = resolve("corpus/.bad-cache.txt");
+const PHISHING_CACHE_PATH = resolve("corpus/.bad-phishing-cache.txt");
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const MAX_FP_RATE = 0.05; // gate: at most 5% of good sites may be flagged
 
@@ -55,9 +56,14 @@ process.on("uncaughtException", (error) => {
 
 async function main(): Promise<void> {
   const refresh = process.argv.includes("--refresh");
+  // --phishing pulls a phishing-ONLY bad corpus (OpenPhish + Phishing.Database
+  // active links, no URLhaus malware binaries) to measure catch rate on
+  // malicious PAGES — where the web heuristics (credential forms, brand
+  // impersonation, cloaking) should actually shine.
+  const phishingOnly = process.argv.includes("--phishing");
   const good = await loadList("corpus/good.txt");
-  const bad = await loadBad(refresh);
-  console.error(`corpus: ${good.length} good, ${bad.length} bad (live)`);
+  const bad = await loadBad(refresh, phishingOnly);
+  console.error(`corpus: ${good.length} good, ${bad.length} bad (live, ${phishingOnly ? "phishing-only" : "mixed"})`);
 
   const labeled: Array<{ url: string; label: "good" | "bad" }> = [
     ...good.map((url) => ({ url, label: "good" as const })),
@@ -151,25 +157,26 @@ function report(results: SiteResult[]): void {
 
 // ---- known-bad corpus (live) --------------------------------------------
 
-async function loadBad(refresh: boolean): Promise<string[]> {
+async function loadBad(refresh: boolean, phishingOnly: boolean): Promise<string[]> {
+  const cachePath = phishingOnly ? PHISHING_CACHE_PATH : CACHE_PATH;
   if (!refresh) {
-    const cached = await readCacheIfFresh();
+    const cached = await readCacheIfFresh(cachePath);
     if (cached) {
       console.error(`using cached bad list (${cached.length} urls)`);
       return cached;
     }
   }
-  console.error("pulling live bad URLs from OpenPhish + URLhaus ...");
-  const candidates = shuffle(dedupe(await fetchBadCandidates()));
+  console.error(`pulling live bad URLs (${phishingOnly ? "phishing-only" : "mixed"}) ...`);
+  const candidates = shuffle(dedupe(await fetchBadCandidates(phishingOnly)));
   console.error(`  ${candidates.length} candidates; probing reachability ...`);
   const live = await probeReachable(candidates, TARGET_BAD);
-  await writeFile(CACHE_PATH, `# pulled ${new Date().toISOString()}\n${live.join("\n")}\n`, "utf8");
+  await writeFile(cachePath, `# pulled ${new Date().toISOString()}\n${live.join("\n")}\n`, "utf8");
   return live;
 }
 
-async function readCacheIfFresh(): Promise<string[] | null> {
+async function readCacheIfFresh(cachePath: string): Promise<string[] | null> {
   try {
-    const text = await readFile(CACHE_PATH, "utf8");
+    const text = await readFile(cachePath, "utf8");
     const stamp = text.match(/# pulled (.+)/)?.[1];
     if (!stamp || Date.now() - Date.parse(stamp) > CACHE_TTL_MS) return null;
     const urls = parseList(text);
@@ -179,7 +186,7 @@ async function readCacheIfFresh(): Promise<string[] | null> {
   }
 }
 
-async function fetchBadCandidates(): Promise<string[]> {
+async function fetchBadCandidates(phishingOnly: boolean): Promise<string[]> {
   const urls: string[] = [];
   // OpenPhish community feed (public, ~hundreds of fresh phishing URLs).
   try {
@@ -187,6 +194,17 @@ async function fetchBadCandidates(): Promise<string[]> {
     if (res.ok) urls.push(...parseList(await res.text()));
   } catch (error) {
     console.error("  openphish fetch failed:", error instanceof Error ? error.message : error);
+  }
+  if (phishingOnly) {
+    // Phishing.Database active links (public, large list of currently-active
+    // phishing URLs) — sampled, no auth.
+    try {
+      const res = await fetch("https://raw.githubusercontent.com/mitchellkrogza/Phishing.Database/master/phishing-links-ACTIVE.txt", { signal: AbortSignal.timeout(30000) });
+      if (res.ok) urls.push(...parseList(await res.text()).filter((u) => u.startsWith("http")).slice(0, 4000));
+    } catch (error) {
+      console.error("  phishing.database fetch failed:", error instanceof Error ? error.message : error);
+    }
+    return urls;
   }
   // URLhaus online URLs (malware distribution). Auth-Key used if present.
   try {
