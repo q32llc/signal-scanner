@@ -20,15 +20,22 @@ import { extractInlineScripts, extractScriptSources, type BehaviorReport, type N
 const MAX_EXTERNAL_SCRIPTS = 8;
 const MAX_SCRIPT_BYTES = 512 * 1024;
 
-/** Runs each script body with the given globals in scope. Caller picks the isolate. */
-export type ScriptRunner = (scripts: string[], globals: Record<string, unknown>) => void;
+/** Self-contained input for the in-isolate core: HTML + already-fetched external script bodies. */
+export interface RenderInput {
+  html: string;
+  url?: string;
+  externalScripts?: string[];
+}
+
+/** Runs renderDom — in-process by default, or inside an isolate (isolated-vm / Dynamic Worker). */
+export type RenderInvoke = (input: RenderInput) => RenderResult | Promise<RenderResult>;
 
 export interface RenderOptions {
   url?: string;
   /** Fetch an external script body (caller provides IO + egress). Omit to skip externals. */
   fetchScript?: (absoluteUrl: string) => Promise<string | null>;
-  /** Execute scripts (caller picks the isolated executor). Default: in-process Function constructor. */
-  run?: ScriptRunner;
+  /** Where renderDom runs (caller's isolate). Default: in-process (trusted/synthetic use only). */
+  invoke?: RenderInvoke;
   maxExternalScripts?: number;
 }
 
@@ -43,22 +50,14 @@ function emptyReport(): BehaviorReport {
   return { redirects: [], network: [], writes: [], evals: [], decoded: [], cookies: [], errors: [] };
 }
 
+// Host orchestrator: pre-fetch external scripts (IO stays on the host — the
+// isolate has no network), then run the pure renderDom core inside the caller's
+// isolate (or in-process by default).
 export async function renderAndScan(html: string, options: RenderOptions = {}): Promise<RenderResult> {
-  const report = emptyReport();
-  let parsed: { document: any; window: any };
-  try {
-    parsed = parseHTML(html);
-  } catch {
-    report.errors.push("linkedom parse failed");
-    return { html, report };
-  }
-  const globals = instrument(parsed.window, parsed.document, options.url, report);
-
-  const inline = extractInlineScripts(html);
-  let external: string[] = [];
+  let externalScripts: string[] = [];
   if (options.fetchScript) {
     const sources = extractScriptSources(html).slice(0, options.maxExternalScripts ?? MAX_EXTERNAL_SCRIPTS);
-    external = (
+    externalScripts = (
       await Promise.all(
         sources.map(async (src) => {
           let absolute: string;
@@ -78,16 +77,34 @@ export async function renderAndScan(html: string, options: RenderOptions = {}): 
       )
     ).filter(Boolean);
   }
+  const invoke = options.invoke ?? renderDom;
+  return await invoke({ html, url: options.url, externalScripts });
+}
 
-  const scripts = [...inline, ...external];
-  const run = options.run ?? defaultRun;
+// The pure, self-contained core: build a real DOM, run inline + provided external
+// scripts against it with instrumented surfaces, return rendered HTML + behaviors.
+// No IO, no host-global mutation — safe to run in-process or bundled into an
+// isolate (isolated-vm / CF Dynamic Worker).
+export function renderDom(input: RenderInput): RenderResult {
+  const report = emptyReport();
+  let parsed: { document: any; window: any };
   try {
-    run(scripts, globals);
-  } catch (error) {
-    report.errors.push(error instanceof Error ? error.message : "render run failed");
+    parsed = parseHTML(input.html);
+  } catch {
+    report.errors.push("linkedom parse failed");
+    return { html: input.html, report };
   }
-
-  let rendered = html;
+  const globals = instrument(parsed.window, parsed.document, input.url, report);
+  const scripts = [...extractInlineScripts(input.html), ...(input.externalScripts ?? [])];
+  for (const body of scripts) {
+    try {
+      // eslint-disable-next-line no-new-func
+      new Function(...Object.keys(globals), body)(...Object.values(globals));
+    } catch (error) {
+      report.errors.push(error instanceof Error ? error.message : "script error");
+    }
+  }
+  let rendered = input.html;
   try {
     rendered = parsed.document.toString();
   } catch {

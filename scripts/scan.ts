@@ -3,26 +3,10 @@ import { createReadStream } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import vm from "node:vm";
 import { createScanner, dispositionForScore, normalizeUrl, scoreFindings, type Finding, type ScannerReport } from "../src/index";
 import { behaviorFindings, discoveredUrlsFromBehavior } from "../src/dynamic";
 import { renderAndScan } from "../src/render";
-
-const DYNAMIC_TIMEOUT_MS = 3000;
-
-// CLI executor: run untrusted page scripts in a fresh node:vm context (globals
-// supplied by the renderer — a real linkedom DOM + instrumented surfaces) with a
-// hard timeout and dynamic import() blocked.
-function vmRunner(scripts: string[], globals: Record<string, unknown>): void {
-  const context = vm.createContext(globals);
-  for (const body of scripts) {
-    try {
-      vm.runInContext(body, context, { timeout: DYNAMIC_TIMEOUT_MS, importModuleDynamically: () => { throw new Error("blocked"); } });
-    } catch {
-      /* malformed/timeout — best effort */
-    }
-  }
-}
+import { renderInIsolate } from "./render-isolate/run";
 
 // Render the page in a real DOM (linkedom), running inline AND external scripts,
 // then fold the rendered-DOM findings + recorded behaviors (exfil/redirect/eval
@@ -52,7 +36,7 @@ async function applyDynamicAnalysis(report: ScannerReport, chunks: Uint8Array[],
   let rendered: string;
   let behavior;
   try {
-    const result = await renderAndScan(html, { url, fetchScript, run: vmRunner });
+    const result = await renderAndScan(html, { url, fetchScript, invoke: renderInIsolate });
     rendered = result.html;
     behavior = result.report;
   } catch {

@@ -41,5 +41,13 @@
   "sideEffects": false,
   "dependencies": {
     "linkedom": "^0.18.12"
+  },
+  "devDependencies": {
+    "base-64": "^1.0.0",
+    "buffer": "^6.0.3",
+    "esbuild": "^0.28.0",
+    "fast-text-encoding": "^1.0.6",
+    "isolated-vm": "^6.1.2",
+    "whatwg-url-without-unicode": "^8.0.0-3"
   }
 }
