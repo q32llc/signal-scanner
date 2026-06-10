@@ -3,3 +3,6 @@ corpus/.bad-phishing-cache.txt
 node_modules/
 .tmp/
 corpus/phishing-live.txt
+
+# Local secrets (e.g. EVAL_PROXY_URL for the eval harness)
+.env
