@@ -180,7 +180,7 @@ const OFFSITE_REQUEST_SCORE: RuleScoreModel = { base: 8, tags: ["script"] };
 const REDIRECT_SCORE: RuleScoreModel = { base: 45, tags: ["redirect", "script"] };
 // eval/Function/string-timer use is ubiquitous in legitimate bundles — weak
 // alone. The re-scan of what they produce (below) is where real convictions come from.
-const EVAL_SCORE: RuleScoreModel = { base: 12, tags: ["obfuscation", "script"] };
+const EVAL_SCORE: RuleScoreModel = { base: 12, tags: ["obfuscation", "script"], maxGroup: "dynamic-code" };
 
 /** Map recorded behavior to scanner findings, re-scanning injected markup and decoded/eval'd code. */
 export function behaviorFindings(report: BehaviorReport, baseUrl?: string): Finding[] {

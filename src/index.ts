@@ -679,11 +679,21 @@ export function scoreFindings(findings: Finding[]): number {
     else groups.set(finding.ruleId, [finding]);
     for (const tag of finding.scoreModel.tags) tags.add(tag);
   }
+  // Within a maxGroup only the single strongest member counts — rules that
+  // observe the same behaviour different ways (eval / new Function / runtime
+  // eval) must not stack and inflate a legit JS-heavy page.
+  const maxGroupScores = new Map<string, number>();
   for (const group of groups.values()) {
     const model = group[0].scoreModel;
     const repeats = Math.min(group.length - 1, model.maxRepeats ?? 0);
-    score += model.base + repeats * model.base * (model.repeatMultiplier ?? 0);
+    const ruleScore = model.base + repeats * model.base * (model.repeatMultiplier ?? 0);
+    if (model.maxGroup) {
+      maxGroupScores.set(model.maxGroup, Math.max(maxGroupScores.get(model.maxGroup) ?? 0, ruleScore));
+    } else {
+      score += ruleScore;
+    }
   }
+  for (const groupScore of maxGroupScores.values()) score += groupScore;
   score *= scoreMultiplier(tags);
   return Math.max(0, Math.min(100, Math.round(score)));
 }

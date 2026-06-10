@@ -24,6 +24,11 @@ export interface RuleScoreModel {
   tags: ScoreTag[];
   repeatMultiplier?: number;
   maxRepeats?: number;
+  // Rules sharing a maxGroup describe the same underlying behaviour observed
+  // different ways (e.g. eval / new Function / runtime eval all = "uses dynamic
+  // code"). Only the single highest-scoring member of a maxGroup contributes to
+  // the total, so a legit page isn't charged N times for one behaviour.
+  maxGroup?: string;
 }
 
 export interface PatternRule {

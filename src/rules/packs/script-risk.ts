@@ -12,7 +12,7 @@ export const scriptRiskRules: PatternRule[] = [
     pattern: /\beval\s*\(/,
     counter: "dynamic_code_execution",
     // eval() is ubiquitous in legitimate minified bundles; weak signal alone.
-    score: { base: 12, tags: ["script"] }
+    score: { base: 12, tags: ["script"], maxGroup: "dynamic-code" }
   },
   {
     id: "function_constructor_with_string",
@@ -25,7 +25,7 @@ export const scriptRiskRules: PatternRule[] = [
     pattern: /\bnew\s+Function\s*\(/,
     // new Function() is ubiquitous in legitimate minified bundles (framework
     // template compilers, lodash, etc.) — weak signal alone, like eval().
-    score: { base: 15, tags: ["script"] }
+    score: { base: 15, tags: ["script"], maxGroup: "dynamic-code" }
   },
   {
     id: "string_timer_execution",
@@ -37,7 +37,7 @@ export const scriptRiskRules: PatternRule[] = [
     locationType: "javascript",
     pattern: /\bset(?:Timeout|Interval)\s*\(\s*['"`]/,
     counter: "dynamic_code_execution",
-    score: { base: 24, tags: ["script"] }
+    score: { base: 24, tags: ["script"], maxGroup: "dynamic-code" }
   },
   {
     id: "document_write_script",
