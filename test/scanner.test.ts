@@ -35,6 +35,19 @@ test("normalizes URLs and classifies off-site, punycode, and shortener destinati
   expect(malwarePath?.flags).toEqual(expect.arrayContaining(["ip_literal", "malware_download_like_path"]));
 });
 
+test("detects formless credential capture (password inputs outside a <form>)", () => {
+  const scan = (html: string, url: string) => {
+    const scanner = createScanner({ source: { url, contentType: "text/html" } });
+    scanner.feed(new TextEncoder().encode(html));
+    return scanner.finish().findings.map((f) => f.ruleId);
+  };
+  // A PIN/OTP grid: password inputs with no <form>, on a shared-hosting subdomain.
+  const pinGrid = `<html><body><div class="pin">${"<input type=password maxlength=1>".repeat(6)}</div></body></html>`;
+  expect(scan(pinGrid, "https://victim123.github.io/login/")).toContain("credential_form_on_suspicious_host");
+  // The same formless password field on an ordinary established domain is not convicted.
+  expect(scan(pinGrid, "https://example.com/")).not.toContain("credential_form_on_suspicious_host");
+});
+
 test("flags brand impersonation in content but not the brand's own login", () => {
   const scan = (html: string, url: string) => {
     const scanner = createScanner({ source: { url, contentType: "text/html" } });

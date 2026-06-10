@@ -327,13 +327,20 @@ function scanHtml(state: ScannerState, text: string): void {
         hiddenTarget: /display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0/i.test(attrs.get("style") ?? "")
       });
     }
-    if (name === "input" && state.forms.length) {
-      increment(state, "html.input");
+    if (name === "input") {
       const type = (attrs.get("type") ?? "").toLowerCase();
       const field = `${attrs.get("name") ?? ""} ${attrs.get("autocomplete") ?? ""}`.toLowerCase();
-      const form = state.forms[state.forms.length - 1];
-      if (type === "password" || field.includes("password")) form.hasPassword = true;
-      if (/(?:cc-|card|cvv|cvc|expiry|payment)/.test(`${type} ${field}`)) form.hasPayment = true;
+      const isPassword = type === "password" || field.includes("password");
+      // A password field anywhere on the page is credential capture, even when
+      // it isn't wrapped in a <form> — PIN/OTP grids and JS-submit kits routinely
+      // place inputs outside any form and exfiltrate via fetch.
+      if (isPassword) increment(state, "page_password_input");
+      if (state.forms.length) {
+        increment(state, "html.input");
+        const form = state.forms[state.forms.length - 1];
+        if (isPassword) form.hasPassword = true;
+        if (/(?:cc-|card|cvv|cvc|expiry|payment)/.test(`${type} ${field}`)) form.hasPayment = true;
+      }
     }
     if (["a", "link", "img", "iframe"].includes(name)) {
       increment(state, `html.${name}`);
@@ -555,11 +562,15 @@ function finalizeAggregateRules(state: ScannerState): void {
       addRuleFinding(state, htmlRules.credential_form_on_suspicious_host, pageUrl(state) ?? "form", {});
     }
   }
+  // Formless credential capture (PIN/OTP grid, JS-submit) on a suspicious host.
+  if (incremented(state, "page_password_input") && hasSuspiciousTargetContext(state)) {
+    addRuleFinding(state, htmlRules.credential_form_on_suspicious_host, pageUrl(state) ?? "form", {});
+  }
   // Brand impersonation in CONTENT: the page prominently names a brand and
   // captures credentials, but is not served from that brand's own domain. This
   // is the durable phishing signal — it doesn't depend on the URL or where the
   // form posts (kits collect to same-host PHP just as often as off-origin).
-  if (state.forms.some((form) => form.hasPassword)) {
+  if (state.forms.some((form) => form.hasPassword) || incremented(state, "page_password_input")) {
     const host = pageHost(state);
     const pageFlags = host ? normalizeUrl(pageUrl(state)!)?.flags ?? [] : [];
     const throwawayHost = pageFlags.some((flag) => ["shared_hosting_subdomain", "generated_host_label", "suspicious_tld", "punycode", "ip_literal"].includes(flag));
