@@ -32,7 +32,14 @@
     "./dynamic": {
       "types": "./src/dynamic.ts",
       "default": "./src/dynamic.ts"
+    },
+    "./render": {
+      "types": "./src/render.ts",
+      "default": "./src/render.ts"
     }
   },
-  "sideEffects": false
+  "sideEffects": false,
+  "dependencies": {
+    "linkedom": "^0.18.12"
+  }
 }

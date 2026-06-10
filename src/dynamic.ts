@@ -136,6 +136,16 @@ export function extractInlineScripts(html: string): string[] {
   return scripts;
 }
 
+// Source URLs of external scripts the page loads (<script src=...>). A renderer
+// fetches and runs these against the DOM, where externally-injected forms appear.
+export function extractScriptSources(html: string): string[] {
+  const sources: string[] = [];
+  for (const match of html.matchAll(/<script\b[^>]*\bsrc\s*=\s*["']([^"']+)["'][^>]*>/gi)) {
+    if (match[1]) sources.push(match[1]);
+  }
+  return [...new Set(sources)];
+}
+
 /**
  * In-process default evaluator. Runs the recorder in THIS isolate (no boundary).
  * Use analyzeDynamicWith with a caller-supplied evaluator when isolation matters.

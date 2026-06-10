@@ -5,58 +5,86 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 import { createScanner, dispositionForScore, normalizeUrl, scoreFindings, type Finding, type ScannerReport } from "../src/index";
-import { RECORDER_SOURCE, behaviorFindings, discoveredUrlsFromBehavior, extractInlineScripts, type BehaviorReport } from "../src/dynamic";
+import { behaviorFindings, discoveredUrlsFromBehavior } from "../src/dynamic";
+import { renderAndScan } from "../src/render";
 
 const DYNAMIC_TIMEOUT_MS = 3000;
 
-// Node-native isolation for the untrusted page JS: a fresh node:vm context with
-// only the globals the recorder needs (no process/require/fs) and a hard
-// timeout. The lib's RECORDER_SOURCE is isolate-agnostic; this is the CLI's
-// chosen executor. (isolated-vm can be swapped in here for a stronger boundary.)
-function recordBehaviorInVm(scripts: string[], url?: string): BehaviorReport {
-  const context = vm.createContext({ URL, atob, btoa, __scripts: scripts, __url: url });
-  return vm.runInNewContext(`${RECORDER_SOURCE}\nrecordBehavior(__scripts, __url)`, context, {
-    timeout: DYNAMIC_TIMEOUT_MS,
-    // Untrusted page JS may use dynamic import(). Without a handler node:vm
-    // throws ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING — and because import() is
-    // async the throw escapes the caller's try/catch. Block it with a rejecting
-    // stub instead: the scanner records behavior, it never loads page modules.
-    importModuleDynamically: () => {
-      throw new Error("dynamic import blocked in scanner sandbox");
+// CLI executor: run untrusted page scripts in a fresh node:vm context (globals
+// supplied by the renderer — a real linkedom DOM + instrumented surfaces) with a
+// hard timeout and dynamic import() blocked.
+function vmRunner(scripts: string[], globals: Record<string, unknown>): void {
+  const context = vm.createContext(globals);
+  for (const body of scripts) {
+    try {
+      vm.runInContext(body, context, { timeout: DYNAMIC_TIMEOUT_MS, importModuleDynamically: () => { throw new Error("blocked"); } });
+    } catch {
+      /* malformed/timeout — best effort */
     }
-  }) as BehaviorReport;
+  }
 }
 
-// Run a fetched HTML page's inline scripts in the sandbox and fold the dynamic
-// findings (runtime exfil/redirects + re-scanned injected/decoded content) into
-// the page report, re-scoring so they count.
-function applyDynamicAnalysis(report: ScannerReport, chunks: Uint8Array[], url: string): void {
+// Render the page in a real DOM (linkedom), running inline AND external scripts,
+// then fold the rendered-DOM findings + recorded behaviors (exfil/redirect/eval
+// + surfaced URLs) back into the page report. Catches externally-injected forms
+// that inline-only analysis can't see.
+async function applyDynamicAnalysis(report: ScannerReport, chunks: Uint8Array[], url: string, options: CrawlOptions): Promise<void> {
   if (report.contentKind !== "html") return;
   const total = chunks.reduce((n, c) => n + c.byteLength, 0);
   const merged = new Uint8Array(total);
   let offset = 0;
   for (const chunk of chunks) { merged.set(chunk, offset); offset += chunk.byteLength; }
-  const scripts = extractInlineScripts(new TextDecoder("utf-8", { fatal: false }).decode(merged));
-  if (!scripts.length) return;
+  const html = new TextDecoder("utf-8", { fatal: false }).decode(merged);
+
+  const fetchScript = async (src: string): Promise<string | null> => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), options.timeoutMs);
+    try {
+      const response = await fetch(src, { headers: { "user-agent": options.userAgent }, redirect: "follow", signal: controller.signal });
+      return response.ok ? await response.text() : null;
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  let rendered: string;
   let behavior;
   try {
-    behavior = recordBehaviorInVm(scripts, url);
+    const result = await renderAndScan(html, { url, fetchScript, run: vmRunner });
+    rendered = result.html;
+    behavior = result.report;
   } catch {
-    return; // sandbox/timeout failure never breaks the scan
+    return; // rendering failure never breaks the scan
   }
-  // Feed URLs the JS surfaced (redirects, fetch/form endpoints, links in
-  // injected markup) into report.urls so the crawler continues into them.
-  const known = new Set(report.urls.map((u) => u.normalized));
-  for (const raw of discoveredUrlsFromBehavior(behavior, url)) {
+
+  // Re-scan the post-render DOM with the static rules.
+  const renderedScanner = createScanner({ source: { url, finalUrl: url, contentType: "text/html" } });
+  renderedScanner.feed(new TextEncoder().encode(rendered));
+  const renderedReport = renderedScanner.finish();
+
+  // Feed rendered-DOM links + behavior-surfaced URLs into the crawl frontier.
+  const knownUrls = new Set(report.urls.map((u) => u.normalized));
+  const addUrl = (raw: string) => {
     const normalized = normalizeUrl(raw, url);
-    if (normalized && !known.has(normalized.normalized)) {
+    if (normalized && !knownUrls.has(normalized.normalized)) {
       report.urls.push(normalized);
-      known.add(normalized.normalized);
+      knownUrls.add(normalized.normalized);
+    }
+  };
+  for (const extracted of renderedReport.urls) addUrl(extracted.normalized);
+  for (const raw of discoveredUrlsFromBehavior(behavior, url)) addUrl(raw);
+
+  // Merge findings: original static + rendered-DOM + recorded behaviors, deduped.
+  const seen = new Set(report.findings.map((f) => `${f.ruleId}:${f.locationValue}`));
+  for (const finding of [...renderedReport.findings, ...behaviorFindings(behavior, url)]) {
+    const key = `${finding.ruleId}:${finding.locationValue}`;
+    if (!seen.has(key)) {
+      report.findings.push(finding);
+      seen.add(key);
     }
   }
-  const dynamic = behaviorFindings(behavior, url);
-  if (!dynamic.length) return;
-  report.findings = [...report.findings, ...dynamic];
   report.score = scoreFindings(report.findings);
   report.disposition = dispositionForScore(report.score);
 }
@@ -260,7 +288,7 @@ async function scanUrl(url: string, options: CrawlOptions): Promise<TargetReport
     }
     const finalUrl = response.url || url;
     const report = responseScanner.finish();
-    applyDynamicAnalysis(report, collected, finalUrl);
+    await applyDynamicAnalysis(report, collected, finalUrl, options);
     return { target: finalUrl, kind: "url", status: response.status, bytes, report };
   } catch (error) {
     return {
