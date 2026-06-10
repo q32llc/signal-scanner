@@ -146,8 +146,28 @@ function instrument(window: any, document: any, url: string | undefined, report:
     return out;
   };
   const safeBtoa = (value: unknown) => { try { return btoa(String(value)); } catch { return String(value); } };
+  // Expose the URL's real components — page JS routinely builds its redirect
+  // target from window.location.search / pathname / origin (a cloaking bouncer
+  // does `dest + location.search`). Missing them yields "undefined" in the URL
+  // and we'd follow the wrong destination.
+  let parsedLocation: URL | null = null;
+  try { parsedLocation = url ? new URL(url) : null; } catch { parsedLocation = null; }
   const location = new Proxy(
-    { href: url ?? "", assign: (u: unknown) => report.redirects.push(resolve(u)), replace: (u: unknown) => report.redirects.push(resolve(u)), reload: () => {}, toString: () => url ?? "" },
+    {
+      href: url ?? "",
+      origin: parsedLocation?.origin ?? "",
+      protocol: parsedLocation?.protocol ?? "",
+      host: parsedLocation?.host ?? "",
+      hostname: parsedLocation?.hostname ?? "",
+      port: parsedLocation?.port ?? "",
+      pathname: parsedLocation?.pathname ?? "/",
+      search: parsedLocation?.search ?? "",
+      hash: parsedLocation?.hash ?? "",
+      assign: (u: unknown) => report.redirects.push(resolve(u)),
+      replace: (u: unknown) => report.redirects.push(resolve(u)),
+      reload: () => {},
+      toString: () => url ?? ""
+    },
     { set: (target, prop, value) => { if (prop === "href") report.redirects.push(resolve(value)); (target as any)[prop] = value; return true; } }
   );
 

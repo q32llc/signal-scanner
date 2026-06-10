@@ -8,6 +8,16 @@ function scanRuleIds(html: string, url: string): string[] {
   return scanner.finish().findings.map((f) => f.ruleId);
 }
 
+test("a redirect built from window.location.search resolves to the real destination", async () => {
+  // Cloaking bouncer pattern: a tiny page forwards to another host, carrying the
+  // original query string. The instrumented location must expose .search (etc.)
+  // so the recorded redirect target is correct — not "…/logs/undefined".
+  const page = `<script>window.location.href = "https://apex.example/wp-content/logs/" + window.location.search;</script>`;
+  const { report } = await renderAndScan(page, { url: "https://bouncer.example/jpsert.htm?uid=abc" });
+  expect(report.redirects).toContain("https://apex.example/wp-content/logs/?uid=abc");
+  expect(report.redirects.some((r) => /undefined/.test(r))).toBe(false);
+});
+
 test("render-and-scan surfaces an externally-injected credential form + behaviors", async () => {
   const url = "https://evil-login.example/";
   const page = `<html><head><title>Welcome</title></head><body><div id="app">Loading…</div>

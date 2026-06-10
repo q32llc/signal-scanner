@@ -12,8 +12,10 @@ import { renderInIsolate } from "./render-isolate/run";
 // then fold the rendered-DOM findings + recorded behaviors (exfil/redirect/eval
 // + surfaced URLs) back into the page report. Catches externally-injected forms
 // that inline-only analysis can't see.
-async function applyDynamicAnalysis(report: ScannerReport, chunks: Uint8Array[], url: string, options: CrawlOptions): Promise<void> {
-  if (report.contentKind !== "html") return;
+// Returns forced-navigation targets (location.href/assign/replace) the page
+// performs at render time — the crawler follows these even cross-origin.
+async function applyDynamicAnalysis(report: ScannerReport, chunks: Uint8Array[], url: string, options: CrawlOptions): Promise<string[]> {
+  if (report.contentKind !== "html") return [];
   const total = chunks.reduce((n, c) => n + c.byteLength, 0);
   const merged = new Uint8Array(total);
   let offset = 0;
@@ -40,7 +42,7 @@ async function applyDynamicAnalysis(report: ScannerReport, chunks: Uint8Array[],
     rendered = result.html;
     behavior = result.report;
   } catch {
-    return; // rendering failure never breaks the scan
+    return []; // rendering failure never breaks the scan
   }
 
   // Re-scan the post-render DOM with the static rules.
@@ -71,6 +73,15 @@ async function applyDynamicAnalysis(report: ScannerReport, chunks: Uint8Array[],
   }
   report.score = scoreFindings(report.findings);
   report.disposition = dispositionForScore(report.score);
+
+  // Forced navigations: the page sent the visitor here (location.href/assign/
+  // replace). Return them so the crawler can follow cross-origin.
+  const navs = new Set<string>();
+  for (const raw of behavior.redirects) {
+    const normalized = normalizeUrl(raw, url);
+    if (normalized) navs.add(normalized.normalized);
+  }
+  return [...navs];
 }
 
 const MAX_FETCH_BYTES = 512 * 1024;
@@ -106,6 +117,8 @@ export interface TargetReport {
   bytes: number;
   report: ScannerReport;
   error?: string;
+  /** Forced-navigation targets (location.href/assign/replace) — followed cross-origin. */
+  forcedNavUrls?: string[];
 }
 
 export interface CrawlOptions {
@@ -134,7 +147,7 @@ interface ParsedArgs {
 interface QueueItem {
   url: string;
   depth: number;
-  source: "start" | "sitemap" | "page";
+  source: "start" | "sitemap" | "page" | "redirect";
 }
 
 interface RobotsPolicy {
@@ -187,7 +200,10 @@ export async function crawlTargets(startUrls: string[], options: CrawlOptions): 
 
   const enqueue = (url: string, depth: number, source: QueueItem["source"]): void => {
     const normalized = normalizeUrl(url);
-    if (!normalized || !isAllowed(normalized.normalized, allowedDomains, allowedHosts)) return;
+    if (!normalized) return;
+    // A forced navigation (redirect) is the page sending the visitor onward —
+    // follow it even cross-origin. Content links stay within the start scope.
+    if (source !== "redirect" && !isAllowed(normalized.normalized, allowedDomains, allowedHosts)) return;
     if (queued.has(normalized.normalized) || seen.has(normalized.normalized)) return;
     if (queued.size + seen.size >= options.maxUrls) return;
     queue.push({ url: normalized.normalized, depth, source });
@@ -211,8 +227,10 @@ export async function crawlTargets(startUrls: string[], options: CrawlOptions): 
       if (seen.has(item.url)) continue;
       seen.add(item.url);
       const normalized = normalizeUrl(item.url);
-      if (!normalized || !isAllowed(normalized.normalized, allowedDomains, allowedHosts)) continue;
-      if (options.robots && item.source !== "start" && isDisallowed(item.url, robotsByDomain.get(boundKey(normalized.normalized)))) continue;
+      // "redirect" items are forced navigations — scanned even when off the start
+      // scope (and exempt from robots, like the start URL).
+      if (!normalized || (item.source !== "redirect" && !isAllowed(normalized.normalized, allowedDomains, allowedHosts))) continue;
+      if (options.robots && item.source !== "start" && item.source !== "redirect" && isDisallowed(item.url, robotsByDomain.get(boundKey(normalized.normalized)))) continue;
 
       const targetReport = await scanUrl(item.url, options);
       totalBytes += targetReport.bytes;
@@ -221,6 +239,12 @@ export async function crawlTargets(startUrls: string[], options: CrawlOptions): 
       if (finalNormalized) seenFinal.add(finalNormalized);
       reports.push(targetReport);
       if (targetReport.error || item.depth >= options.maxDepth) continue;
+      // Forced navigations first — follow them even cross-origin (cloaking
+      // bouncers hop to the host that actually serves the credential kit).
+      for (const nav of targetReport.forcedNavUrls ?? []) {
+        if (seen.size + queued.size >= options.maxUrls) break;
+        enqueue(nav, item.depth + 1, "redirect");
+      }
       for (const extracted of targetReport.report.urls) {
         if (seen.size + queued.size >= options.maxUrls) break;
         enqueue(extracted.normalized, item.depth + 1, "page");
@@ -272,8 +296,8 @@ async function scanUrl(url: string, options: CrawlOptions): Promise<TargetReport
     }
     const finalUrl = response.url || url;
     const report = responseScanner.finish();
-    await applyDynamicAnalysis(report, collected, finalUrl, options);
-    return { target: finalUrl, kind: "url", status: response.status, bytes, report };
+    const forcedNavUrls = await applyDynamicAnalysis(report, collected, finalUrl, options);
+    return { target: finalUrl, kind: "url", status: response.status, bytes, report, forcedNavUrls };
   } catch (error) {
     return {
       target: url,
