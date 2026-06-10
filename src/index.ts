@@ -251,7 +251,10 @@ export function normalizeUrl(raw: string, base?: string): ExtractedUrl | null {
     if (isIpLiteral(host)) flags.push("ip_literal");
     if (isPrivateHost(host)) flags.push("private_or_localhost");
     if (isUrlShortener(host)) flags.push("url_shortener");
-    if (/(?:login|signin|account|verify|wallet|checkout|payment|download|payload)/i.test(url.pathname)) flags.push("suspicious_path_terms");
+    // Credential/account/banking lure terms in the path (multilingual + a few
+    // leetspeak spellings). These only CONVICT when the host is also suspicious
+    // (see credential_path_on_suspicious_host), so the breadth is safe.
+    if (/(?:log[i1]n|sign[\s_-]?[i1]n|signon|account|verify|verif|wallet|checkout|payment|download|payload|secure|update|confirm|recover|unlock|billing|webscr|kunden|compte|cliente?s|conta|codigo|banking)/i.test(url.pathname)) flags.push("suspicious_path_terms");
     if (isSuspiciousTld(host)) flags.push("suspicious_tld");
     if (/(?:\/|^)(?:payload|installer|setup|invoice|verify|wallet|checkout|payment)(?:[\/_.-]|$)|\.(?:exe|scr|msi|dmg|pkg|apk|zip)$/i.test(url.pathname)) {
       flags.push("download_like_path");
@@ -921,7 +924,14 @@ function isGeneratedHostLabel(host: string, registrableDomain: string | null): b
   if (!label || label === registrableDomain) return false;
   return /(?:client|account|secure|manager|payment|support|verify|login|area)[-_]?\d{5,}/i.test(label) ||
     /^[a-z]+(?:-[a-z]+){2,}-\d{4,}$/.test(label) ||
-    /^[a-z0-9]{16,}$/.test(label);
+    /^[a-z0-9]{16,}$/.test(label) ||
+    // A long hex run anywhere in the label (e.g. pub-de59803496c8489585895b6917266e7c.r2.dev).
+    /[a-f0-9]{12,}/i.test(label) ||
+    // A short all-hex label that includes a digit (0efbd9f, 0ed8a96, 0c4d4e6).
+    (label.length >= 7 && /^[a-f0-9]+$/i.test(label) && /\d/.test(label)) ||
+    // A short label that is ~half digits — the auto-generated bulk-phishing
+    // naming scheme (000p4en, 000ogwl, 000o5eh), which no real brand uses.
+    (label.length >= 6 && label.replace(/[^0-9]/g, "").length / label.length >= 0.4);
 }
 
 // Well-known ad, analytics, and tag-manager networks. Scripts from these are
