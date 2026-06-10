@@ -244,11 +244,12 @@ async function probeReachable(candidates: string[], target: number): Promise<str
   await pool(candidates, 12, async (url) => {
     if (live.length >= target) return;
     try {
-      const res = await fetch(url, { headers: { "user-agent": BROWSER_UA }, redirect: "follow", signal: AbortSignal.timeout(8000) });
-      if (res.status < 400) {
-        const body = await res.text();
-        if (body.length > 200 && live.length < target) live.push(url);
-      }
+      // A live phishing kit serves real content (200) at the URL itself. A
+      // taken-down one 404s or 301/302s to a park/block page — exclude those
+      // (status !== 200) so a dead corpus doesn't dilute recall. No body-size
+      // gate: a single <script> tag can be a complete phishing page.
+      const res = await fetch(url, { headers: { "user-agent": BROWSER_UA }, redirect: "manual", signal: AbortSignal.timeout(8000) });
+      if (res.status === 200 && live.length < target) live.push(url);
     } catch {
       // dead/unreachable — skip
     }
