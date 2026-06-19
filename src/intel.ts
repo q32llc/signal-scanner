@@ -9,11 +9,11 @@
 // keyed reputation sources, and returns both normalized scanner `Finding`s and a
 // per-source result so callers can show which feeds ran, matched, or failed.
 
-import type { Finding, Severity, Confidence } from "./index";
-import type { RuleScoreModel } from "./rules/types";
-import { matchCachedFeeds, type IntelStorage } from "./feeds";
+import type { Finding, Severity, Confidence } from "./index.js";
+import type { RuleScoreModel } from "./rules/types.js";
+import { matchCachedFeeds, type IntelStorage } from "./feeds.js";
 
-export type { IntelStorage } from "./feeds";
+export type { IntelStorage } from "./feeds.js";
 
 export interface UrlIntelConfig {
   /** Fetch implementation. Defaults to the global `fetch`. */

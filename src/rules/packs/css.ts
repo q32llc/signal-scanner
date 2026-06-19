@@ -1,4 +1,4 @@
-import type { RuleDefinition } from "../types";
+import type { RuleDefinition } from "../types.js";
 
 export const cssRules: Record<"hidden_link_cluster" | "unicode_bidi_trick" | "css_imports_suspicious_domain" | "invisible_form_overlay", RuleDefinition> = {
   hidden_link_cluster: {

@@ -1,4 +1,4 @@
-import type { RuleDefinition } from "../types";
+import type { RuleDefinition } from "../types.js";
 
 export const htmlRules: Record<
   | "external_script_from_unrelated_domain"

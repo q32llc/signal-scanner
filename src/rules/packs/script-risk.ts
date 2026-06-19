@@ -1,4 +1,4 @@
-import type { PatternRule, RuleDefinition } from "../types";
+import type { PatternRule, RuleDefinition } from "../types.js";
 
 export const scriptRiskRules: PatternRule[] = [
   {

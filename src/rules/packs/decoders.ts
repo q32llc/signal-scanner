@@ -1,4 +1,4 @@
-import type { RuleDefinition } from "../types";
+import type { RuleDefinition } from "../types.js";
 
 export const decodedArtifactRules: Record<"large_base64_blob" | "javascript_hex_escapes" | "javascript_unicode_escapes" | "fromcharcode_decoded_string", RuleDefinition> = {
   large_base64_blob: {

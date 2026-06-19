@@ -1,4 +1,4 @@
-import type { PatternRule } from "../types";
+import type { PatternRule } from "../types.js";
 
 export const sourceCodeRules: PatternRule[] = [
   {

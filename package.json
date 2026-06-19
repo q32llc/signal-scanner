@@ -1,6 +1,6 @@
 {
   "name": "@q32/signal-scanner",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "Static web signal scanner with bounded streaming analyzers, URL extraction, rule packs, scoring, and normalized reports.",
   "license": "MIT",
@@ -10,10 +10,12 @@
   },
   "files": [
     "README.md",
-    "src/",
+    "dist/",
     "scripts/"
   ],
   "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepack": "npm run build",
     "test": "bun test",
     "coverage": "bun test --coverage --coverage-reporter=lcov --coverage-dir=coverage && bun scripts/check-coverage.ts coverage/lcov.info 80",
     "coverage:report": "bun test --coverage",
@@ -22,28 +24,28 @@
   },
   "exports": {
     ".": {
-      "types": "./src/index.ts",
-      "default": "./src/index.ts"
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
     },
     "./node-tls": {
-      "types": "./src/node-tls.ts",
-      "default": "./src/node-tls.ts"
+      "types": "./dist/node-tls.d.ts",
+      "default": "./dist/node-tls.js"
     },
     "./intel": {
-      "types": "./src/intel.ts",
-      "default": "./src/intel.ts"
+      "types": "./dist/intel.d.ts",
+      "default": "./dist/intel.js"
     },
     "./feeds": {
-      "types": "./src/feeds.ts",
-      "default": "./src/feeds.ts"
+      "types": "./dist/feeds.d.ts",
+      "default": "./dist/feeds.js"
     },
     "./dynamic": {
-      "types": "./src/dynamic.ts",
-      "default": "./src/dynamic.ts"
+      "types": "./dist/dynamic.d.ts",
+      "default": "./dist/dynamic.js"
     },
     "./render": {
-      "types": "./src/render.ts",
-      "default": "./src/render.ts"
+      "types": "./dist/render.d.ts",
+      "default": "./dist/render.js"
     }
   },
   "sideEffects": false,
@@ -57,6 +59,8 @@
     "esbuild": "^0.28.0",
     "fast-text-encoding": "^1.0.6",
     "isolated-vm": "^6.1.2",
+    "typescript": "^5.9.3",
+    "@types/node": "^24.0.0",
     "whatwg-url-without-unicode": "^8.0.0-3"
   }
 }

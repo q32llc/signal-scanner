@@ -1,19 +1,19 @@
-export { binaryRules, binaryStringRules } from "./binary";
-export { cssRules } from "./css";
-export { decodedArtifactRules } from "./decoders";
-export { htmlRules } from "./html";
-export { htmlTechnologyRules } from "./html";
-export { scriptCompositeRules, scriptRiskRules } from "./script-risk";
-export { sourceCodeRules } from "./source-code";
-export { urlRules } from "./urls";
+export { binaryRules, binaryStringRules } from "./binary.js";
+export { cssRules } from "./css.js";
+export { decodedArtifactRules } from "./decoders.js";
+export { htmlRules } from "./html.js";
+export { htmlTechnologyRules } from "./html.js";
+export { scriptCompositeRules, scriptRiskRules } from "./script-risk.js";
+export { sourceCodeRules } from "./source-code.js";
+export { urlRules } from "./urls.js";
 
-import { binaryRules, binaryStringRules } from "./binary";
-import { cssRules } from "./css";
-import { decodedArtifactRules } from "./decoders";
-import { htmlRules, htmlTechnologyRules } from "./html";
-import { scriptCompositeRules, scriptRiskRules } from "./script-risk";
-import { sourceCodeRules } from "./source-code";
-import { urlRules } from "./urls";
+import { binaryRules, binaryStringRules } from "./binary.js";
+import { cssRules } from "./css.js";
+import { decodedArtifactRules } from "./decoders.js";
+import { htmlRules, htmlTechnologyRules } from "./html.js";
+import { scriptCompositeRules, scriptRiskRules } from "./script-risk.js";
+import { sourceCodeRules } from "./source-code.js";
+import { urlRules } from "./urls.js";
 
 export const rulePacks = {
   phishing: [

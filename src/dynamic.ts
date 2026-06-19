@@ -17,8 +17,8 @@
 //   - analyzeDynamicWith(html, opts, evaluate): the generic seam — the caller
 //     passes an `evaluate` that produces a BehaviorReport however it likes.
 
-import { assessRedirect, createScanner, isAdOrAnalyticsHost, registrableDomainFor, type Finding, type Severity, type Confidence } from "./index";
-import type { RuleScoreModel } from "./rules/types";
+import { assessRedirect, createScanner, isAdOrAnalyticsHost, registrableDomainFor, type Finding, type Severity, type Confidence } from "./index.js";
+import type { RuleScoreModel } from "./rules/types.js";
 
 export interface NetworkAttempt {
   kind: "fetch" | "xhr" | "beacon" | "websocket" | "script" | "image" | "form";

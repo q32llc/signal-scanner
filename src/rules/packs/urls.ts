@@ -1,4 +1,4 @@
-import type { RuleDefinition } from "../types";
+import type { RuleDefinition } from "../types.js";
 
 export const urlRules: Record<
   | "punycode_login_url"

@@ -1,4 +1,4 @@
-import type { PatternRule, RuleDefinition } from "../types";
+import type { PatternRule, RuleDefinition } from "../types.js";
 
 export const binaryRules: Record<"elf_executable_magic" | "content_type_magic_mismatch" | "elf_writable_executable_stack", RuleDefinition> = {
   elf_executable_magic: {

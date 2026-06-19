@@ -15,7 +15,7 @@
 // default in-process runner is for trusted/synthetic use (tests).
 
 import { parseHTML } from "linkedom";
-import { extractInlineScripts, extractScriptSources, type BehaviorReport, type NetworkAttempt } from "./dynamic";
+import { extractInlineScripts, extractScriptSources, type BehaviorReport, type NetworkAttempt } from "./dynamic.js";
 
 const MAX_EXTERNAL_SCRIPTS = 8;
 const MAX_SCRIPT_BYTES = 512 * 1024;

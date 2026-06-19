@@ -1,6 +1,6 @@
 import { connect } from "node:tls";
 import type { PeerCertificate } from "node:tls";
-import type { TlsMetadata } from "./index";
+import type { TlsMetadata } from "./index.js";
 
 export interface CollectTlsMetadataOptions {
   port?: number;

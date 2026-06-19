@@ -1,6 +1,6 @@
 import { Parser } from "htmlparser2";
-import { binaryRules, binaryStringRules, cssRules, decodedArtifactRules, htmlRules, htmlTechnologyRules, scriptCompositeRules, scriptRiskRules, sourceCodeRules, urlRules } from "./rules/packs";
-import type { RuleDefinition, RuleScoreModel, ScoreTag } from "./rules/types";
+import { binaryRules, binaryStringRules, cssRules, decodedArtifactRules, htmlRules, htmlTechnologyRules, scriptCompositeRules, scriptRiskRules, sourceCodeRules, urlRules } from "./rules/packs/index.js";
+import type { RuleDefinition, RuleScoreModel, ScoreTag } from "./rules/types.js";
 
 export type ContentKind = "html" | "javascript" | "css" | "json" | "svg" | "text" | "unknown" | "archive" | "executable";
 export type Severity = "info" | "low" | "medium" | "high" | "critical";
