@@ -109,10 +109,19 @@ the rendered DOM.
 import { renderAndScan } from "@q32/signal-scanner/render";
 ```
 
+This is the core of the scanner. Static crawling and URL extraction just feed
+bytes in; the signal that matters comes from rendering a page in a real DOM,
+executing its inline and external scripts under instrumentation, and folding the
+rendered DOM plus recorded behaviors (exfil/redirect/eval, surfaced URLs) back
+into the report. That catches credential forms injected by external scripts,
+`document.write` payloads, and cloaking bouncers that inline-only analysis can't
+see.
+
 `renderAndScan` runs in-process by default and is intended for trusted or
 synthetic inputs unless you provide an isolate. The included Node CLI runs this
 render step in `isolated-vm`, so untrusted page JavaScript cannot reach host
-`fetch`, `process`, or `fs`.
+`fetch`, `process`, or `fs`. That sandbox guarantee is covered by an integration
+test (`npm run test:isolate`).
 
 Cloudflare users can provide their own isolate or Worker-based invocation when
 embedding the library, but that is separate from the CLI.
@@ -166,6 +175,9 @@ The CLI prints a normalized JSON summary to stdout.
 
 ## Rule Coverage
 
+See [`docs/rule-packs.md`](docs/rule-packs.md) for the rule model (pattern vs.
+analyzer-emitted rules), the score/tag system, and how to add a rule.
+
 - HTML signals for forms, password/payment fields, scripts, links, iframes,
   meta refresh redirects, hidden iframe patterns, login/payment language,
   page-model screenshot/login cues, crypto/DeFi landing language,
@@ -210,9 +222,13 @@ Build and test:
 
 ```bash
 npm run build
-npm test
-npm run coverage   # enforces an 80% line-coverage gate
+npm test             # unit suite (bun)
+npm run coverage     # unit suite + an 80% line-coverage gate
+npm run test:isolate # the isolated-vm dynamic-render path, under Node
 ```
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full workflow and
+[`docs/rule-packs.md`](docs/rule-packs.md) for the rule system.
 
 The eval harness (`npm run eval`) measures the detector against a labeled corpus
 of live known-good and known-bad sites. It is dev-only and not shipped in the

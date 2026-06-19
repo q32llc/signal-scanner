@@ -24,6 +24,7 @@
     "build": "tsc -p tsconfig.json",
     "prepack": "npm run build",
     "test": "bun test",
+    "test:isolate": "npm run build && node --test test/integration/isolate.mjs",
     "coverage": "bun test --coverage --coverage-reporter=lcov --coverage-dir=coverage && bun scripts/check-coverage.ts coverage/lcov.info 80",
     "coverage:report": "bun test --coverage",
     "scan": "tsx src/cli.ts",

@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install
+
+      # Static analyzers + rule packs, with the 80% line-coverage gate.
+      - run: npm run coverage
+
+      # The dynamic-render path: page JS executed inside isolated-vm. Runs under
+      # Node (Bun cannot load the isolated-vm native addon) against built dist/.
+      - run: npm run test:isolate
