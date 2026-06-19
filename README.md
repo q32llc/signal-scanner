@@ -227,8 +227,9 @@ npm run coverage     # unit suite + an 80% line-coverage gate
 npm run test:isolate # the isolated-vm dynamic-render path, under Node
 ```
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full workflow and
-[`docs/rule-packs.md`](docs/rule-packs.md) for the rule system.
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full workflow,
+[`docs/rule-packs.md`](docs/rule-packs.md) for the rule system, and
+[`CHANGELOG.md`](CHANGELOG.md) for release history.
 
 The eval harness (`npm run eval`) measures the detector against a labeled corpus
 of live known-good and known-bad sites. It is dev-only and not shipped in the
