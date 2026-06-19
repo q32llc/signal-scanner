@@ -8,6 +8,11 @@
     "type": "git",
     "url": "https://github.com/q32llc/signal-scanner.git"
   },
+  "files": [
+    "README.md",
+    "src/",
+    "scripts/"
+  ],
   "scripts": {
     "test": "bun test",
     "coverage": "bun test --coverage --coverage-reporter=lcov --coverage-dir=coverage && bun scripts/check-coverage.ts coverage/lcov.info 80",
