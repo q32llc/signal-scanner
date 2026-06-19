@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project is pre-1.0 ([SemVer](https://semver.org/) `0.x`): the public API may
 change between minor versions until `1.0.0`.
 
-## [Unreleased] — 0.2.0
+## [0.2.0] — 2026-06-19
 
 Launch-readiness pass: the package now installs, exposes a working CLI, and is
 correctly licensed and tested.
@@ -81,6 +81,7 @@ Initial public release. A runtime-portable static + dynamic web signal scanner.
 - Initial packaging: restricted published files, normalized repository metadata,
   npm trusted-publishing (OIDC) workflow, and runtime documentation.
 
-[Unreleased]: https://github.com/q32llc/signal-scanner/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/q32llc/signal-scanner/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/q32llc/signal-scanner/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/q32llc/signal-scanner/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/q32llc/signal-scanner/releases/tag/v0.1.0
