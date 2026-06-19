@@ -1,49 +1,76 @@
 # @q32/signal-scanner
 
-Open-source static web and source-code signal scanner with bounded streaming analyzers, extractors, rule packs, scoring, and normalized reports.
+Static web signal scanner with bounded streaming analyzers, URL extraction,
+rule packs, scoring, and normalized JSON reports.
 
-This package is intentionally independent from testvirus.org orchestration, uploads, Fly machines, D1, R2, and Cloudflare Workers. It is the scanner. Applications can embed it in crawlers, file pipelines, queues, Workers, CLIs, or other fetch systems.
+`@q32/signal-scanner` is a library first. It scans HTML, JavaScript, CSS, text,
+SVG, JSON, archives, and selected binary content without requiring a browser or a
+complete file in memory. Applications provide bytes and optional source metadata;
+the scanner returns findings, extracted URLs, decoded artifacts, counters, a
+score, and a disposition.
 
-## Architecture
+## Install
 
-Plain pipeline:
-
-```text
-Fetcher -> Content Detector -> Stream Scanner -> Extractors -> Normalizers -> Rule Engine -> Scorer -> Reporter
+```bash
+npm install @q32/signal-scanner
 ```
 
-Crawler pipeline:
-
-```text
-Start URL -> fetch page -> stream HTML scanner -> extract links/scripts/forms/iframes/redirects -> enqueue allowed assets -> scan each asset -> aggregate findings by site
-```
-
-File pipeline:
-
-```text
-File or archive -> detect file type -> stream content -> scan -> extract referenced URLs -> aggregate findings
-```
-
-## Current API
+## Library Usage
 
 ```ts
 import { createScanner } from "@q32/signal-scanner";
 
 const scanner = createScanner({
-  source: { url: "https://example.com/login", contentType: "text/html" }
+  source: {
+    url: "https://example.com/login",
+    contentType: "text/html"
+  }
 });
 
 scanner.feed(chunk);
 const report = scanner.finish();
 ```
 
-The scanner keeps bounded state: rolling text windows, line/column tracking, tag/script context, URL/domain inventory, decoded artifact lineage, entropy windows, and signal counters.
+The scanner keeps bounded state: rolling text windows, line/column tracking,
+tag/script context, URL/domain inventory, decoded artifact lineage, entropy
+windows, and signal counters.
 
-It does not submit forms, execute JavaScript, set cookies, or require a full file.
+The default scanner does not submit forms, set cookies, open network
+connections, or import Node-only modules.
 
-## TLS Metadata
+## Report Shape
 
-TLS analysis belongs to the scanner, but TLS collection depends on the host runtime. Pass collected metadata through `source.tls` when creating a scanner:
+`scanner.finish()` returns:
+
+```ts
+interface ScannerReport {
+  contentKind: "html" | "javascript" | "css" | "json" | "svg" | "text" | "unknown" | "archive" | "executable";
+  findings: Finding[];
+  urls: ExtractedUrl[];
+  artifacts: ArtifactRecord[];
+  score: number;
+  disposition: "allow" | "warn" | "review" | "block";
+  counters: Record<string, number>;
+}
+```
+
+Findings include rule id, severity, confidence, score, title, description,
+location, and rule metadata.
+
+## Runtime Integration
+
+The core library is runtime-portable. It is suitable for Node, Workers, queues,
+crawlers, upload pipelines, and other systems that can feed bytes into the
+scanner.
+
+Cloudflare is only relevant if you choose to embed the library in a Cloudflare
+runtime. The package does not require Cloudflare, and the Node CLI does not use
+Cloudflare.
+
+### TLS Metadata
+
+TLS analysis belongs to the scanner, but TLS collection depends on the host
+runtime. Pass collected metadata through `source.tls` when creating a scanner:
 
 ```ts
 const scanner = createScanner({
@@ -61,7 +88,7 @@ const scanner = createScanner({
 });
 ```
 
-Node-compatible runtimes, including Cloudflare Workers with `nodejs_compat`, can use the optional helper:
+Node-compatible runtimes can use the optional helper:
 
 ```ts
 import { collectTlsMetadata } from "@q32/signal-scanner/node-tls";
@@ -69,21 +96,52 @@ import { collectTlsMetadata } from "@q32/signal-scanner/node-tls";
 const tls = await collectTlsMetadata("https://example.com", { timeoutMs: 5000 });
 ```
 
-The default scanner export does not import `node:tls`, so streaming analysis remains portable to runtimes that only provide fetch/body streams.
+The default scanner export does not import `node:tls`, so streaming analysis
+stays portable to runtimes that only provide fetch/body streams.
+
+## Dynamic Rendering
+
+The library includes optional dynamic analysis helpers for rendering HTML with
+`linkedom`, instrumenting browser-like APIs, recording behavior, and rescanning
+the rendered DOM.
+
+```ts
+import { renderAndScan } from "@q32/signal-scanner/render";
+```
+
+`renderAndScan` runs in-process by default and is intended for trusted or
+synthetic inputs unless you provide an isolate. The included Node CLI runs this
+render step in `isolated-vm`, so untrusted page JavaScript cannot reach host
+`fetch`, `process`, or `fs`.
+
+Cloudflare users can provide their own isolate or Worker-based invocation when
+embedding the library, but that is separate from the CLI.
 
 ## Node CLI
 
-The package includes a small Node CLI for local checks and corpus testing. It is intentionally separate from any Worker queue, upload, R2, D1, or Fly-machine orchestration.
+The package includes a Node CLI for local URL checks, bounded crawling, and
+artifact/file scanning.
 
 ```bash
-npx tsx scripts/scan.ts crawl https://example.com
-npx tsx scripts/scan.ts crawl --no-robots --parallel 10 --max-urls 50 --max-depth 2 https://example.com
-npx tsx scripts/scan.ts files ./src
+npm run scan -- crawl https://example.com
+npm run scan -- crawl --no-robots --parallel 10 --max-urls 50 --max-depth 2 https://example.com
+npm run scan -- files ./samples
 ```
 
-The crawler is static: GET requests only, no JavaScript execution, no cookies, bounded redirects through `fetch`, bounded bytes per response, bounded total bytes, and global URL dedupe. Crawls are bounded to the registrable domain of the submitted URL, with exact-host bounds for IP-literal targets.
+The CLI uses Node APIs for fetching and file IO. For dynamic rendering, it uses
+`isolated-vm`.
 
-Crawler options:
+Crawler behavior:
+
+- GET requests only.
+- Bounded redirects through `fetch`.
+- Bounded bytes per response and bounded total bytes.
+- Global URL dedupe.
+- Registrable-domain crawl bounds for hostnames.
+- Exact-host crawl bounds for IP-literal targets.
+- Robots.txt and sitemap support by default.
+
+CLI options:
 
 - `--no-robots` skips fetching and obeying `robots.txt`. Root sitemap probes still run.
 - `--parallel, -n <count>` sets bounded concurrent fetches. Default: `10`.
@@ -96,31 +154,30 @@ Crawler options:
 - `--user-agent <value>` sets the crawler user agent.
 - `--max-file-bytes <bytes>` caps bytes per file in `files` mode.
 
-When robots are enabled, the crawler reads `Sitemap:` directives and also probes common root sitemap paths: `/sitemap.xml`, `/sitemap_index.xml`, and `/sitemap-index.xml`.
+The CLI prints a normalized JSON summary to stdout.
 
-## Implemented Components
+## Rule Coverage
 
-- Content detector for HTML, JavaScript, CSS, JSON, SVG, text, unknown, and archive content.
-- URL/domain extractor with normalization, relative URL resolution, registrable-domain comparison, scheme classification, IP/private-host detection, punycode flags, shared-hosting subdomain flags, shortener flags, suspicious-TLD flags, and download-like path flags.
-- HTML analyzer for forms, password/payment fields, scripts, links, iframes, meta refresh redirects, hidden iframe patterns, login/payment language, page-model screenshot/login cues, crypto/DeFi landing language, trademark-stuffed SEO titles, and technology/dependency surface fingerprints.
-- JavaScript text analyzer for dynamic execution, DOM injection sinks, dynamic script creation, decoder APIs, request APIs, redirect APIs, storage/cookie/clipboard access, wallet APIs, payment input hooks, and exfiltration candidates.
-- CSS analyzer for remote imports/URLs, hidden/offscreen content, opacity tricks, invisible overlays, and unicode-bidi tricks.
-- Normalizer/decoder for high-confidence bounded base64, JavaScript hex/unicode escapes, and `String.fromCharCode` literal artifacts, with recursive rescanning.
-- Binary static analyzer for executable magic, declared content-type mismatch, executable-stack ELF headers, and IoT botnet/dropper strings.
-- Source-code rule signals for hardcoded secret candidates, webhook URLs, child process execution, curl-pipe-shell, install lifecycle scripts, non-literal require/RegExp, sensitive file reads, private key material, weak crypto, and template escaping disabled.
-- Rule/scoring/report output with severity, confidence, score, disposition, findings, extracted URLs, decoded artifacts, and counters.
+- HTML signals for forms, password/payment fields, scripts, links, iframes,
+  meta refresh redirects, hidden iframe patterns, login/payment language,
+  page-model screenshot/login cues, crypto/DeFi landing language,
+  trademark-stuffed SEO titles, and technology/dependency fingerprints.
+- JavaScript text signals for dynamic execution, DOM injection sinks, dynamic
+  script creation, decoder APIs, request APIs, redirect APIs, storage/cookie/
+  clipboard access, wallet APIs, payment input hooks, and exfiltration
+  candidates.
+- CSS signals for remote imports/URLs, hidden/offscreen content, opacity tricks,
+  invisible overlays, and unicode-bidi tricks.
+- URL signals for punycode login URLs, URL shorteners, private/local targets,
+  shared-hosting subdomains, suspicious TLDs, brand impersonation, generated
+  landing URLs, and download-like targets.
+- Decoder signals for bounded base64, JavaScript hex/unicode escapes, and
+  `String.fromCharCode` literal artifacts, with recursive rescanning.
+- Binary static signals for executable magic, declared content-type mismatch,
+  executable-stack ELF headers, IoT botnet strings, router exploit strings,
+  dropper commands, and DHT/CNC protocol strings.
 
-## Rule Packs
-
-Rules live under `src/rules/packs/`:
-
-- `html.ts` for phishing, credential forms, suspicious-host credential forms, image-rendered credential UIs, crypto/wallet login language, crypto/DeFi trading landing language, trademark-stuffed SEO titles, payment forms, iframes, external scripts, mixed content, meta refresh redirects, dependency fingerprints, and web technology fingerprints.
-- `script-risk.ts` for dynamic execution, DOM injection sinks, dynamic script loading, redirect APIs, request APIs, browser storage/cookie access, decoder APIs, wallet APIs, payment hooks, and composite script risks.
-- `source-code.ts` for source-code risk signals such as hardcoded secret candidates, webhook URLs, child process execution, curl-pipe-shell, install scripts, non-literal require/RegExp, sensitive file reads, private keys, weak crypto, and template escaping disabled.
-- `css.ts` for remote imports, hidden/offscreen content, invisible overlays, and unicode-bidi tricks.
-- `urls.ts` for punycode login URLs, URL shorteners, private/local target URLs, shared-hosting subdomains, suspicious TLDs, brand impersonation, generated landing URLs, and download-like target URLs.
-- `decoders.ts` for decoded base64, JavaScript escapes, and `String.fromCharCode` artifacts.
-- `binary.ts` for executable magic, content-type/magic mismatch, ELF stack flags, IoT botnet strings, router exploit strings, dropper commands, and DHT/CNC protocol strings.
+## Scoring
 
 Every rule has an explicit score model:
 
@@ -133,6 +190,12 @@ score: {
 }
 ```
 
-`severity` and `confidence` are report/display metadata. They do not drive scoring. The scorer sums each rule's explicit `base`, applies each rule's explicit repeat policy, and then applies a small set of explicit tag-based context multipliers such as credential plus suspicious hosting, wallet/payment plus exfiltration/redirect, decoded artifact plus script behavior, or binary plus URL evidence.
+`severity` and `confidence` are report/display metadata. They do not drive
+scoring. The scorer sums each rule's explicit `base`, applies each rule's repeat
+policy, and then applies explicit tag-based context multipliers such as
+credential plus suspicious hosting, wallet/payment plus exfiltration/redirect,
+decoded artifact plus script behavior, or binary plus URL evidence.
 
-Complete-file tools such as ClamAV, capa, FLOSS, and normal binary YARA workflows can be routed by applications when a full file is materialized. They are not faked in the streaming hot path.
+## License
+
+MIT

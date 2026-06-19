@@ -2,13 +2,16 @@
   "name": "@q32/signal-scanner",
   "version": "0.1.0",
   "type": "module",
-  "description": "Static web and source-code signal scanner with bounded streaming analyzers, extractors, rule packs, scoring, and normalized reports.",
+  "description": "Static web signal scanner with bounded streaming analyzers, URL extraction, rule packs, scoring, and normalized reports.",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/q32llc/signal-scanner.git"
   },
   "scripts": {
+    "test": "bun test",
+    "coverage": "bun test --coverage --coverage-reporter=lcov --coverage-dir=coverage && bun scripts/check-coverage.ts coverage/lcov.info 80",
+    "coverage:report": "bun test --coverage",
     "scan": "tsx scripts/scan.ts",
     "eval": "NODE_USE_ENV_PROXY=1 HTTP_PROXY=\"${EVAL_PROXY_URL-}\" HTTPS_PROXY=\"${EVAL_PROXY_URL-}\" tsx --env-file-if-exists=.env scripts/eval.ts"
   },

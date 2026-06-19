@@ -1,6 +1,7 @@
 corpus/.bad-cache.txt
 corpus/.bad-phishing-cache.txt
 node_modules/
+coverage/
 .tmp/
 corpus/phishing-live.txt
 
