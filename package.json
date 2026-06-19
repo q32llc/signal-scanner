@@ -6,7 +6,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/q32llc/signal-scanner.git"
+    "url": "git+https://github.com/q32llc/signal-scanner.git"
   },
   "files": [
     "README.md",
