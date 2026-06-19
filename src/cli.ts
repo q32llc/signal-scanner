@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
-import { createReadStream } from "node:fs";
+import { createReadStream, realpathSync } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -604,8 +604,24 @@ function nonNegativeInt(value: string, name: string): number {
   return parsed;
 }
 
-// Only run the CLI when invoked directly, not when imported (e.g. by eval.ts).
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+// Run the CLI only when invoked directly, not when imported (e.g. by eval.ts).
+// process.argv[1] is the path used to launch us; for an npm bin that's a symlink
+// (…/.bin/signal-scanner), so it must be resolved through symlinks before
+// comparing to this module's already-resolved real path — otherwise the bin
+// runs nothing and exits silently.
+function invokedDirectly(): boolean {
+  const argv1 = process.argv[1];
+  if (!argv1) return false;
+  let invoked: string;
+  try {
+    invoked = realpathSync(argv1);
+  } catch {
+    invoked = resolve(argv1);
+  }
+  return fileURLToPath(import.meta.url) === invoked;
+}
+
+if (invokedDirectly()) {
   main().catch((error) => {
     console.error(error);
     process.exit(1);

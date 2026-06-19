@@ -28,3 +28,20 @@ jobs:
       # The dynamic-render path: page JS executed inside isolated-vm. Runs under
       # Node (Bun cannot load the isolated-vm native addon) against built dist/.
       - run: npm run test:isolate
+
+      # Smoke-test the PACKAGED artifact the way a consumer installs it: pack,
+      # install into a clean dir WITHOUT the optional native deps, and run the
+      # bin. The unit suites all run with every dep present, so they can't catch
+      # module-load-time crashes on a lean install — this is the regression guard
+      # for the 0.2.0 startup bug (punycode resolved at import time).
+      - name: Packaged install smoke test (--no-optional)
+        run: |
+          set -euo pipefail
+          TGZ="$(npm pack --silent)"
+          TMP="$(mktemp -d)"
+          printf '<html><body><form action="https://evil.example/x"><input type=password></form></body></html>' > "$TMP/sample.html"
+          ( cd "$TMP" && npm init -y >/dev/null && npm install "$GITHUB_WORKSPACE/$TGZ" --no-optional >/dev/null )
+          OUT="$("$TMP/node_modules/.bin/signal-scanner" files "$TMP/sample.html")"
+          printf '%s\n' "$OUT" | head -c 400
+          printf '%s' "$OUT" | grep -q '"disposition"' || { echo "::error::signal-scanner bin produced no report on a lean install"; exit 1; }
+          echo "OK: bin runs on a --no-optional install"

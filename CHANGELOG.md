@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project is pre-1.0 ([SemVer](https://semver.org/) `0.x`): the public API may
 change between minor versions until `1.0.0`.
 
+## [0.2.2] — 2026-06-19
+
+### Fixed
+- The `signal-scanner` bin produced no output and exited 0 when launched through
+  the npm-installed executable (the documented `npx @q32/signal-scanner` / global
+  path). The "invoked directly?" guard compared this module's resolved real path
+  against the unresolved launch path, which for an npm bin is a symlink
+  (`.../.bin/signal-scanner`) — so they never matched and `main()` never ran. The
+  guard now resolves the launch path through symlinks. Running `node dist/cli.js`
+  directly was unaffected, which is why earlier checks missed it; the new CI
+  smoke test exercises the symlinked bin and caught it.
+
 ## [0.2.1] — 2026-06-19
 
 ### Fixed
@@ -91,7 +103,8 @@ Initial public release. A runtime-portable static + dynamic web signal scanner.
 - Initial packaging: restricted published files, normalized repository metadata,
   npm trusted-publishing (OIDC) workflow, and runtime documentation.
 
-[Unreleased]: https://github.com/q32llc/signal-scanner/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/q32llc/signal-scanner/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/q32llc/signal-scanner/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/q32llc/signal-scanner/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/q32llc/signal-scanner/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/q32llc/signal-scanner/compare/v0.1.0...v0.1.1
