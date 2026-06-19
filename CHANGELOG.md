@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project is pre-1.0 ([SemVer](https://semver.org/) `0.x`): the public API may
 change between minor versions until `1.0.0`.
 
+## [0.2.1] — 2026-06-19
+
+### Fixed
+- The CLI no longer crashes on startup when the optional render dependencies are
+  absent (e.g. installed with `--no-optional`, or `isolated-vm` can't build).
+  `punycode` was resolved at module load time in the render executor, throwing
+  before any work began — it is now resolved lazily inside the render path, so
+  the static scan/crawl path runs regardless. Found by installing the published
+  `0.2.0` tarball with `--no-optional` and running the `signal-scanner` bin.
+
 ## [0.2.0] — 2026-06-19
 
 Launch-readiness pass: the package now installs, exposes a working CLI, and is
@@ -81,7 +91,8 @@ Initial public release. A runtime-portable static + dynamic web signal scanner.
 - Initial packaging: restricted published files, normalized repository metadata,
   npm trusted-publishing (OIDC) workflow, and runtime documentation.
 
-[Unreleased]: https://github.com/q32llc/signal-scanner/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/q32llc/signal-scanner/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/q32llc/signal-scanner/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/q32llc/signal-scanner/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/q32llc/signal-scanner/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/q32llc/signal-scanner/releases/tag/v0.1.0

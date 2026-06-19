@@ -16,10 +16,7 @@ import type { RenderInput, RenderResult } from "../render.js";
 const HERE = import.meta.dirname;
 const CALL_TIMEOUT_MS = 6000;
 
-// Punycode lives in a transitive (linkedom/whatwg-url); resolve it through the
-// module graph so it works whether or not node_modules is hoisted.
 const require = createRequire(import.meta.url);
-const PUNYCODE = require.resolve("punycode/punycode.es6.js");
 
 // Sibling bundle entry: `.js` once compiled into dist/, `.ts` when run from
 // source via tsx. esbuild bundles either.
@@ -48,14 +45,14 @@ async function loadDeps(): Promise<{ ivm: any; build: any }> {
 // Typed as `any` so the build does not hard-depend on the optional deps' types.
 let ready: Promise<{ isolate: any; poly: any; render: any }> | null = null;
 
-async function bundleOnce(build: any, base: string): Promise<string> {
+async function bundleOnce(build: any, base: string, punycodePath: string): Promise<string> {
   const result = await build({
     entryPoints: [entryPath(base)],
     bundle: true,
     format: "iife",
     platform: "node",
     treeShaking: false, // keep polyfill side-effects (sideEffects:false would drop them)
-    alias: { punycode: PUNYCODE },
+    alias: { punycode: punycodePath },
     write: false
   });
   return result.outputFiles[0].text;
@@ -65,7 +62,11 @@ async function init() {
   if (!ready) {
     ready = (async () => {
       const { ivm, build } = await loadDeps();
-      const [polyCode, renderCode] = await Promise.all([bundleOnce(build, "polyfills"), bundleOnce(build, "entry")]);
+      // Punycode is an optional dep (via linkedom/whatwg-url); resolve it lazily
+      // here — NOT at module top level — so importing this file never throws when
+      // the render deps aren't installed, leaving the static scan path intact.
+      const punycodePath = require.resolve("punycode/punycode.es6.js");
+      const [polyCode, renderCode] = await Promise.all([bundleOnce(build, "polyfills", punycodePath), bundleOnce(build, "entry", punycodePath)]);
       const isolate = new ivm.Isolate({ memoryLimit: 256 });
       const poly = await isolate.compileScript(polyCode);
       const render = await isolate.compileScript(renderCode);
