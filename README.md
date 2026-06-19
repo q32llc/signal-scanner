@@ -119,17 +119,25 @@ embedding the library, but that is separate from the CLI.
 
 ## Node CLI
 
-The package includes a Node CLI for local URL checks, bounded crawling, and
-artifact/file scanning.
+The package ships a `signal-scanner` binary for local URL checks, bounded
+crawling, and artifact/file scanning.
 
 ```bash
-npm run scan -- crawl https://example.com
-npm run scan -- crawl --no-robots --parallel 10 --max-urls 50 --max-depth 2 https://example.com
-npm run scan -- files ./samples
+npx @q32/signal-scanner crawl https://example.com
+npx @q32/signal-scanner crawl --no-robots --parallel 10 --max-urls 50 --max-depth 2 https://example.com
+npx @q32/signal-scanner files ./samples
 ```
 
-The CLI uses Node APIs for fetching and file IO. For dynamic rendering, it uses
-`isolated-vm`.
+After a global install (`npm i -g @q32/signal-scanner`) the same commands are
+available as `signal-scanner crawl …`. Inside this repo, `npm run scan -- …`
+runs the CLI from source.
+
+The CLI uses Node APIs for fetching and file IO. Dynamic rendering runs page
+JavaScript inside `isolated-vm`; `isolated-vm` and `esbuild` are
+**optional dependencies**. A default `npm install` pulls them in, but if they
+are unavailable (e.g. installed with `--no-optional`, or a build toolchain for
+the `isolated-vm` native addon is missing) the CLI logs a notice and continues
+with static analysis only.
 
 Crawler behavior:
 
@@ -196,6 +204,29 @@ policy, and then applies explicit tag-based context multipliers such as
 credential plus suspicious hosting, wallet/payment plus exfiltration/redirect,
 decoded artifact plus script behavior, or binary plus URL evidence.
 
+## Development
+
+Build and test:
+
+```bash
+npm run build
+npm test
+npm run coverage   # enforces an 80% line-coverage gate
+```
+
+The eval harness (`npm run eval`) measures the detector against a labeled corpus
+of live known-good and known-bad sites. It is dev-only and not shipped in the
+package. Because many ISPs intercept known-bad hosts (which tanks recall), it
+can route its crawl through an outbound proxy configured via a local `.env`.
+Copy `.env.example` to `.env` and fill in proxy credentials if you need this;
+leave it unset to crawl directly. `.env` is gitignored — never commit
+credentials.
+
 ## License
 
-MIT
+[GNU Lesser General Public License v3.0 or later](COPYING.LESSER) (LGPL-3.0-or-later).
+
+Application code may link and use this library without itself becoming
+LGPL/GPL; modifications to the library must be released under the LGPL. The
+LGPL builds on the [GPL-3.0](COPYING); both license texts ship with the
+package.

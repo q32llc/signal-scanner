@@ -12,7 +12,7 @@
 
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { crawlTargets, DEFAULT_CRAWL_OPTIONS, type CrawlOptions } from "./scan";
+import { crawlTargets, DEFAULT_CRAWL_OPTIONS, type CrawlOptions } from "../src/cli";
 import { dispositionForScore } from "../src/index";
 
 const FLAG_THRESHOLD = 50; // score >= 50 => product surfaces suspicious/malicious

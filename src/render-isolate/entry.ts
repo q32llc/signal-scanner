@@ -1,2 +1,2 @@
-import { renderDom } from "../../src/render";
+import { renderDom } from "../render.js";
 (globalThis as any).__renderAndScan = renderDom;

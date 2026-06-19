@@ -1,12 +1,13 @@
+#!/usr/bin/env node
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createScanner, dispositionForScore, normalizeUrl, scoreFindings, type Finding, type ScannerReport } from "../src/index";
-import { behaviorFindings, discoveredUrlsFromBehavior } from "../src/dynamic";
-import { renderAndScan } from "../src/render";
-import { renderInIsolate } from "./render-isolate/run";
+import { createScanner, dispositionForScore, normalizeUrl, scoreFindings, type Finding, type ScannerReport } from "./index.js";
+import { behaviorFindings, discoveredUrlsFromBehavior } from "./dynamic.js";
+import { renderAndScan } from "./render.js";
+import { renderInIsolate } from "./render-isolate/run.js";
 
 // Render the page in a real DOM (linkedom), running inline AND external scripts,
 // then fold the rendered-DOM findings + recorded behaviors (exfil/redirect/eval
@@ -160,8 +161,8 @@ async function main(): Promise<void> {
   if (!args) {
     console.error(
       [
-        "usage: tsx packages/signal-scanner/scripts/scan.ts crawl [options] <url...>",
-        "       tsx packages/signal-scanner/scripts/scan.ts files [options] <path...>",
+        "usage: signal-scanner crawl [options] <url...>",
+        "       signal-scanner files [options] <path...>",
         "",
         "crawl options:",
         "  --no-robots                 do not fetch or obey robots.txt",

@@ -1,17 +1,24 @@
 {
   "name": "@q32/signal-scanner",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "type": "module",
   "description": "Static web signal scanner with bounded streaming analyzers, URL extraction, rule packs, scoring, and normalized reports.",
-  "license": "MIT",
+  "license": "LGPL-3.0-or-later",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/q32llc/signal-scanner.git"
   },
+  "engines": {
+    "node": ">=20.11"
+  },
+  "bin": {
+    "signal-scanner": "dist/cli.js"
+  },
   "files": [
     "README.md",
-    "dist/",
-    "scripts/"
+    "COPYING",
+    "COPYING.LESSER",
+    "dist/"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -19,7 +26,7 @@
     "test": "bun test",
     "coverage": "bun test --coverage --coverage-reporter=lcov --coverage-dir=coverage && bun scripts/check-coverage.ts coverage/lcov.info 80",
     "coverage:report": "bun test --coverage",
-    "scan": "tsx scripts/scan.ts",
+    "scan": "tsx src/cli.ts",
     "eval": "NODE_USE_ENV_PROXY=1 HTTP_PROXY=\"${EVAL_PROXY_URL-}\" HTTPS_PROXY=\"${EVAL_PROXY_URL-}\" tsx --env-file-if-exists=.env scripts/eval.ts"
   },
   "exports": {
@@ -53,14 +60,17 @@
     "htmlparser2": "^10.1.0",
     "linkedom": "^0.18.12"
   },
-  "devDependencies": {
+  "optionalDependencies": {
     "base-64": "^1.0.0",
     "buffer": "^6.0.3",
     "esbuild": "^0.28.0",
     "fast-text-encoding": "^1.0.6",
     "isolated-vm": "^6.1.2",
-    "typescript": "^5.9.3",
-    "@types/node": "^24.0.0",
+    "punycode": "^2.3.1",
     "whatwg-url-without-unicode": "^8.0.0-3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.3"
   }
 }
